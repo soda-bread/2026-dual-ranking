@@ -1,0 +1,30 @@
+problem_names:
+  - re21
+  - re22
+  - re23
+  - re24
+  - re25
+  - mo-portfolio
+  - truss2d
+  - welded_beam
+
+n_gen: 100
+pop_size: 100
+seed_start: 1
+seed_end: 31
+train_seed: 42
+test_seed: 1
+sample_sizes_by_problem:
+  re21: 300
+  re22: 300
+  re23: 300
+  re24: 300
+  re25: 300
+  mo-portfolio: 300
+  truss2d: 300
+  welded_beam: 300
+show_seed_output: False
+dual_ranking_target_coverage: 0.90
+dual_ranking_alpha_max: 500.0
+dual_ranking_alpha_step: 0.01
+dual_ranking_quantile: 0.90

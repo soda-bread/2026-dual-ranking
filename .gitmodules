@@ -1,0 +1,4 @@
+[submodule "external/offline-moo"]
+    path = external/offline-moo
+    url = https://github.com/lamda-bbo/offline-moo.git
+    ignore = dirty
