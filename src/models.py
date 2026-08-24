@@ -1,21 +1,109 @@
 import copy
 import contextlib
 import io
+import inspect
 import logging
 import os
+import shutil
+import sys
 import tempfile
+import weakref
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
 
-TABPFN_TOKEN = "tabpfn_sk_oYB3VV-fcuoIOMmO48LDhBSN4lbyzmfEMV91tGJwDmA"
+TABPFN_CONFIG_PATH = Path(__file__).resolve().parents[1] / "experiments" / "config.yaml"
+_TABPFN_CONFIG_TOKENS = None
+_TABPFN_CONFIG_NAMES = (
+    "tabpfn_primary_api_key",
+    "tabpfn_fallback_api_key",
+    "tabpfn_fallback_api_key_2",
+)
+_TABPFN_ENV_NAMES = (
+    "TABPFN_PRIMARY_API_KEY",
+    "TABPFN_FALLBACK_API_KEY",
+    "TABPFN_FALLBACK_API_KEY_2",
+    "TABPFN_TOKEN",
+)
 
 
-def _set_tabpfn_token():
-    os.environ["TABPFN_TOKEN"] = TABPFN_TOKEN
-    return TABPFN_TOKEN
+def _tabpfn_config_tokens():
+    global _TABPFN_CONFIG_TOKENS
+    if _TABPFN_CONFIG_TOKENS is not None:
+        return _TABPFN_CONFIG_TOKENS
+    try:
+        import yaml
+        with TABPFN_CONFIG_PATH.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+    except ImportError:
+        config = {}
+        for raw_line in TABPFN_CONFIG_PATH.read_text(encoding="utf-8").splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            for name in _TABPFN_CONFIG_NAMES:
+                prefix = f"{name}:"
+                if line.startswith(prefix):
+                    config[name] = line[len(prefix):].strip().strip("\"'")
+    environment_tokens = [
+        os.getenv(name, "").strip()
+        for name in _TABPFN_ENV_NAMES
+        if os.getenv(name, "").strip()
+    ]
+    config_tokens = [
+        str(config.get(name, "")).strip()
+        for name in _TABPFN_CONFIG_NAMES
+        if str(config.get(name, "")).strip()
+    ]
+    tokens = tuple(
+        dict.fromkeys(
+            environment_tokens + config_tokens
+        )
+    )
+    if not tokens:
+        raise RuntimeError(
+            "Set TABPFN_PRIMARY_API_KEY (and optional fallback environment "
+            "variables) before running TabPFN."
+        )
+    _TABPFN_CONFIG_TOKENS = tokens
+    return _TABPFN_CONFIG_TOKENS
+
+
+_TABPFN_ACTIVE_TOKEN = None
+_TABPFN_EXHAUSTED_TOKENS = set()
+
+
+def _set_tabpfn_token(token=None):
+    global _TABPFN_ACTIVE_TOKEN
+    token = token or _tabpfn_config_tokens()[0]
+    os.environ["TABPFN_TOKEN"] = token
+    _TABPFN_ACTIVE_TOKEN = token
+    return token
+
+
+def _is_tabpfn_limit_error(error):
+    markers = (
+        "429", "too many requests", "rate limit", "quota", "usage limit",
+        "api limit", "limit reached", "reached your limit", "credit limit",
+        "credits exhausted", "resource exhausted",
+    )
+    seen = set()
+    current = error
+    messages = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(f"{type(current).__name__}: {current}".lower())
+        for attribute in ("status_code", "status", "code"):
+            if str(getattr(current, attribute, "")) == "429":
+                return True
+        current = current.__cause__ or current.__context__
+    text = "\n".join(messages)
+    return any(marker in text for marker in markers)
+
+
+def _mark_tabpfn_token_exhausted(token):
+    _TABPFN_EXHAUSTED_TOKENS.add(token)
 
 
 def _safe_std_from_variance(y_var):
@@ -24,6 +112,9 @@ def _safe_std_from_variance(y_var):
 
 
 def _require_gpy():
+    # Older GPy versions import LinAlgError from the private module path
+    # numpy.linalg.linalg, which was removed by newer NumPy releases.
+    sys.modules.setdefault("numpy.linalg.linalg", np.linalg)
     try:
         import GPy
     except ImportError as err:
@@ -126,13 +217,18 @@ def autogluon_qr_fit_predict(X_train, y_train, X_test, quantile_levels=None, ran
     train_df = pd.DataFrame(X_train, columns=[f"x{i}" for i in range(X_train.shape[1])])
     train_df["target"] = y_train
 
+    model_dir = tempfile.mkdtemp(prefix="autogluon_qr_")
     model = TabularPredictor(
         label="target",
         problem_type="quantile",
         quantile_levels=quantile_levels,
-        path=tempfile.mkdtemp(prefix="autogluon_qr_"),
+        path=model_dir,
         verbosity=0,
-    ).fit(
+    )
+    model._experiment_cleanup_finalizer = weakref.finalize(
+        model, shutil.rmtree, model_dir, True
+    )
+    model.fit(
         train_data=train_df,
         verbosity=0,
         excluded_model_types=["CAT"],
@@ -183,10 +279,16 @@ def autogluon_fit_predict(
     fit_kwargs = {} if fit_kwargs is None else dict(fit_kwargs)
     fit_kwargs.setdefault("excluded_model_types", ["CAT"])
 
+    model_dir = tempfile.mkdtemp(prefix="autogluon_regression_")
     model = TabularPredictor(
         label="target",
         problem_type="regression",
-    ).fit(
+        path=model_dir,
+    )
+    model._experiment_cleanup_finalizer = weakref.finalize(
+        model, shutil.rmtree, model_dir, True
+    )
+    model.fit(
         train_data=train_df,
         hyperparameters=hyperparameters,
         verbosity=0,
@@ -209,8 +311,8 @@ def autogluon_pred_mean(model_f1, model_f2, X_test):
     return np.stack([mean_f1, mean_f2], axis=1)
 
 
-def _require_tabpfn():
-    _set_tabpfn_token()
+def _require_tabpfn(token=None):
+    token = _set_tabpfn_token(token)
     try:
         from tabpfn_client import TabPFNRegressor, set_access_token
     except ImportError as err:
@@ -218,26 +320,74 @@ def _require_tabpfn():
             "tabpfn-client is required for TabPFN-3 surrogate models. "
             "Install it with `pip install tabpfn-client`, then restart the runtime before continuing."
         ) from err
-    set_access_token(TABPFN_TOKEN)
+    set_access_token(token)
     return TabPFNRegressor
 
 
-def tabpfn_fit_predict(X_train, y_train, X_test):
-    _set_tabpfn_token()
-    TabPFNRegressor = _require_tabpfn()
-    model = TabPFNRegressor()
+def tabpfn_fit_predict(X_train, y_train, X_test, random_state=42):
     X_train = np.asarray(X_train, dtype=float)
     y_train = np.asarray(y_train, dtype=float).reshape(-1)
-    _set_tabpfn_token()
-    model.fit(X_train, y_train)
-    pred = tabpfn_predict(model, X_test)
-    return pred, model
+    tokens = tuple(
+        token for token in _tabpfn_config_tokens()
+        if token not in _TABPFN_EXHAUSTED_TOKENS
+    )
+    if not tokens:
+        raise RuntimeError("All configured TabPFN API keys have reached their limits")
+    last_limit_error = None
+    for token in tokens:
+        try:
+            TabPFNRegressor = _require_tabpfn(token)
+            try:
+                constructor_parameters = inspect.signature(
+                    TabPFNRegressor
+                ).parameters
+            except (TypeError, ValueError):
+                constructor_parameters = {}
+            constructor_kwargs = {}
+            if "random_state" in constructor_parameters:
+                constructor_kwargs["random_state"] = int(random_state)
+            elif "seed" in constructor_parameters:
+                constructor_kwargs["seed"] = int(random_state)
+            model = TabPFNRegressor(**constructor_kwargs)
+            model._experiment_model_seed = int(random_state)
+            model.fit(X_train, y_train)
+        except Exception as error:
+            if not _is_tabpfn_limit_error(error):
+                raise
+            _mark_tabpfn_token_exhausted(token)
+            last_limit_error = error
+            continue
+        pred = tabpfn_predict(model, X_test)
+        return pred, model
+    raise last_limit_error
 
 
 def tabpfn_predict(model, X):
     X = np.asarray(X, dtype=float)
-    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        return np.asarray(model.predict(X), dtype=float).reshape(-1)
+    configured_tokens = _tabpfn_config_tokens()
+    active_token = _TABPFN_ACTIVE_TOKEN or configured_tokens[0]
+    try:
+        start = configured_tokens.index(active_token)
+    except ValueError:
+        start = 0
+    tokens = tuple(
+        token for token in configured_tokens[start:]
+        if token not in _TABPFN_EXHAUSTED_TOKENS
+    )
+    if not tokens:
+        raise RuntimeError("All configured TabPFN API keys have reached their limits")
+    last_limit_error = None
+    for token in tokens:
+        try:
+            _require_tabpfn(token)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return np.asarray(model.predict(X), dtype=float).reshape(-1)
+        except Exception as error:
+            if not _is_tabpfn_limit_error(error):
+                raise
+            _mark_tabpfn_token_exhausted(token)
+            last_limit_error = error
+    raise last_limit_error
 
 
 def tabpfn_pred_mean(model_f1, model_f2, X_test):
@@ -411,7 +561,15 @@ class BNNRegressor:
             return []
         return [self.device.index if self.device.index is not None else 0]
 
-    def fit(self, X, y, X_val=None, y_val=None):
+    def fit(
+        self,
+        X,
+        y,
+        X_val=None,
+        y_val=None,
+        X_refit=None,
+        y_refit=None,
+    ):
         modules = _require_pyro()
         torch = modules["torch"]
         pyro = modules["pyro"]
@@ -433,6 +591,19 @@ class BNNRegressor:
             raise ValueError("X and X_val must have the same number of columns.")
         if y_val.shape[0] != X_val.shape[0]:
             raise ValueError("X_val and y_val must have the same number of rows.")
+        if (X_refit is None) != (y_refit is None):
+            raise ValueError("X_refit and y_refit must be provided together.")
+        if X_refit is not None:
+            X_refit = np.asarray(X_refit, dtype=np.float32)
+            y_refit = np.asarray(y_refit, dtype=np.float32).reshape(-1)
+            if X_refit.ndim != 2 or X_refit.shape[1] != X.shape[1]:
+                raise ValueError(
+                    "X_refit must be 2D with the same columns as X."
+                )
+            if len(X_refit) != len(y_refit):
+                raise ValueError("X_refit and y_refit row counts must match.")
+            if len(X_refit) < 2:
+                raise ValueError("BNN refitting needs at least two samples.")
 
         self.target_scaler.fit(y.reshape(-1, 1))
         y_scaled = self.target_scaler.transform(y.reshape(-1, 1)).reshape(-1)
@@ -472,6 +643,7 @@ class BNNRegressor:
 
                 best_val_mse = float("inf")
                 best_state = None
+                best_step = None
                 no_improve = 0
                 for step in range(1, self.max_steps + 1):
                     loss = svi.step(X_tensor, y_tensor)
@@ -491,6 +663,7 @@ class BNNRegressor:
                     if val_mse < best_val_mse:
                         best_val_mse = val_mse
                         best_state = copy.deepcopy(param_store.get_state())
+                        best_step = step
                         no_improve = 0
                     else:
                         no_improve += 1
@@ -513,9 +686,58 @@ class BNNRegressor:
                     param_store.clear()
                     param_store.set_state(best_state)
 
-            self.param_store_state = param_store_state
+            selected_steps = int(best_step if best_step is not None else step)
+            self.selection_training_steps = int(step)
+            self.best_validation_step = selected_steps
+
+            if X_refit is None:
+                self.param_store_state = param_store_state
+                self.training_steps = int(step)
+                self.refit_training_size = None
+            else:
+                # Early stopping selected only the step count.  Reinitialize
+                # every variational parameter and fit the delivered model on
+                # all configured N rows, using normalization from those N rows.
+                self.target_scaler.fit(y_refit.reshape(-1, 1))
+                y_refit_scaled = self.target_scaler.transform(
+                    y_refit.reshape(-1, 1)
+                ).reshape(-1)
+                X_refit_tensor = torch.tensor(
+                    X_refit,
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                y_refit_tensor = torch.tensor(
+                    y_refit_scaled,
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                torch.manual_seed(self.random_state)
+                if self.device.type == "cuda":
+                    torch.cuda.manual_seed_all(self.random_state)
+                with param_store.scope() as refit_param_store_state:
+                    self.model = _build_bayesian_network(
+                        modules,
+                        in_dim=X_refit.shape[1],
+                        hidden=self.hidden,
+                        prior_scale=self.prior_scale,
+                        fixed_sigma=self.fixed_sigma,
+                    ).to(self.device)
+                    self.guide = modules["AutoDiagonalNormal"](self.model)
+                    refit_optimizer = modules["Adam"]({"lr": self.lr})
+                    refit_svi = modules["SVI"](
+                        self.model,
+                        self.guide,
+                        refit_optimizer,
+                        loss=modules["Trace_ELBO"](),
+                    )
+                    for _ in range(selected_steps):
+                        refit_svi.step(X_refit_tensor, y_refit_tensor)
+                self.param_store_state = refit_param_store_state
+                self.training_steps = selected_steps
+                self.refit_training_size = int(len(X_refit))
+
             self.best_val_mse = best_val_mse
-            self.training_steps = step
         return self
 
     def _predictive_samples(self, X, num_samples=None):
@@ -636,6 +858,120 @@ def _generate_calibration_data(problem, sample_size, train_seed, test_seed):
     )
 
 
+def train_gpr_models_for_calibration(
+    problem,
+    sample_size,
+    kernel="rbf",
+    train_seed=42,
+    test_seed=1,
+):
+    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
+    X_train, y_train, X_val, y_val, X_test, y_test = data
+    model_class = GPR_RBF if str(kernel).lower() == "rbf" else GPR_Matern
+    models = tuple(model_class() for _ in range(y_train.shape[1]))
+    for objective_index, model in enumerate(models):
+        model.fit(X_train, y_train[:, objective_index])
+    return models, X_train, y_train, X_val, y_val, X_test, y_test
+
+
+def train_autogluon_qr_models_for_calibration(
+    problem,
+    sample_size,
+    train_seed=42,
+    test_seed=1,
+):
+    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
+    X_train, y_train, X_val, y_val, X_test, y_test = data
+    models = tuple(
+        autogluon_qr_fit_predict(
+            X_train,
+            y_train[:, objective_index],
+            X_test,
+            random_state=train_seed,
+        )[1]
+        for objective_index in range(y_train.shape[1])
+    )
+    return models, X_train, y_train, X_val, y_val, X_test, y_test
+
+
+def train_autogluon_models_for_calibration(
+    problem,
+    sample_size,
+    train_seed=42,
+    test_seed=1,
+    hyperparameters=None,
+    fit_kwargs=None,
+):
+    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
+    X_train, y_train, X_val, y_val, X_test, y_test = data
+    models = tuple(
+        autogluon_fit_predict(
+            X_train,
+            y_train[:, objective_index],
+            X_test,
+            hyperparameters=hyperparameters,
+            fit_kwargs=fit_kwargs,
+            random_state=train_seed,
+        )[1]
+        for objective_index in range(y_train.shape[1])
+    )
+    return models, X_train, y_train, X_val, y_val, X_test, y_test
+
+
+def train_tabpfn_models_for_calibration(
+    problem,
+    sample_size,
+    train_seed=42,
+    test_seed=1,
+):
+    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
+    X_train, y_train, X_val, y_val, X_test, y_test = data
+    models = tuple(
+        tabpfn_fit_predict(
+            X_train,
+            y_train[:, objective_index],
+            X_test,
+            random_state=train_seed,
+        )[1]
+        for objective_index in range(y_train.shape[1])
+    )
+    return models, X_train, y_train, X_val, y_val, X_test, y_test
+
+
+def train_bnn_models_for_calibration(
+    problem,
+    sample_size,
+    train_seed=42,
+    test_seed=1,
+    hidden=16,
+    lr=1e-3,
+    max_steps=50000,
+    patience=10,
+    fixed_sigma=1e-3,
+):
+    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
+    X_train, y_train, X_val, y_val, X_test, y_test = data
+    models = tuple(
+        BNNRegressor(
+            hidden=hidden,
+            lr=lr,
+            max_steps=max_steps,
+            patience=patience,
+            fixed_sigma=fixed_sigma,
+            random_state=train_seed,
+        )
+        for _ in range(y_train.shape[1])
+    )
+    for objective_index, model in enumerate(models):
+        model.fit(
+            X_train,
+            y_train[:, objective_index],
+            X_val,
+            y_val[:, objective_index],
+        )
+    return models, X_train, y_train, X_val, y_val, X_test, y_test
+
+
 def train_gpr_rbf_for_calibration(problem, sample_size, train_seed=42, test_seed=1):
     X_train, y_train, X_val, y_val, X_test, y_test = _generate_calibration_data(
         problem,
@@ -730,11 +1066,13 @@ def train_tabpfn_for_calibration(problem, sample_size, train_seed=42, test_seed=
         X_train,
         y_train[:, 0],
         X_test,
+        random_state=train_seed,
     )
     _, model_f2 = tabpfn_fit_predict(
         X_train,
         y_train[:, 1],
         X_test,
+        random_state=train_seed,
     )
     return model_f1, model_f2, X_train, y_train, X_test, y_test
 

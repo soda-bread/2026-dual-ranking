@@ -1,30 +1,97 @@
 problem_names:
+  - zdt1
+  - zdt2
+  - zdt3
+  - zdt4
+  - zdt6
+  - omnitest
+  - vlmop1
+  - vlmop2
+  - vlmop3
+  - dtlz1
+  - dtlz2
+  - dtlz3
+  - dtlz4
+  - dtlz5
+  - dtlz6
+  - dtlz7
   - re21
   - re22
   - re23
   - re24
   - re25
+  - re31
+  - re32
+  - re33
+  - re34
+  - re35
+  - re36
+  - re37
   - mo-portfolio
-  - truss2d
-  - welded_beam
+  - molecule
 
 n_gen: 100
 pop_size: 100
 seed_start: 1
-seed_end: 31
+seed_end: 11
 train_seed: 42
 test_seed: 1
 sample_sizes_by_problem:
+  zdt1: 300
+  zdt2: 300
+  zdt3: 300
+  zdt4: 300
+  zdt6: 300
+  omnitest: 300
+  vlmop1: 300
+  vlmop2: 300
+  vlmop3: 300
+  dtlz1: 300
+  dtlz2: 300
+  dtlz3: 300
+  dtlz4: 300
+  dtlz5: 300
+  dtlz6: 300
+  dtlz7: 300
   re21: 300
   re22: 300
   re23: 300
   re24: 300
   re25: 300
+  re31: 300
+  re32: 300
+  re33: 300
+  re34: 300
+  re35: 300
+  re36: 300
+  re37: 300
   mo-portfolio: 300
-  truss2d: 300
-  welded_beam: 300
+  molecule: 300
 show_seed_output: False
 dual_ranking_target_coverage: 0.90
 dual_ranking_alpha_max: 500.0
 dual_ranking_alpha_step: 0.01
 dual_ranking_quantile: 0.90
+
+# TabPFN credentials must be provided through TABPFN_PRIMARY_API_KEY and the
+# optional TABPFN_FALLBACK_API_KEY / TABPFN_FALLBACK_API_KEY_2 environment
+# variables. Never store live credentials in this file.
+tabpfn_primary_api_key: ""
+tabpfn_fallback_api_key: ""
+tabpfn_fallback_api_key_2: ""
+
+# Complete training-sample-size sensitivity experiment. Command-line flags are
+# explicit per-run overrides of this section.
+sample_size_ablation:
+  dataset_source: lhs
+  disabled_methods: ["TabPFN + NSGA-II"]
+  train_sizes: [50, 100, 200, 400, 1000]
+  lhs_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  opt_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  validation_size: 100
+  test_size: 100
+  n_gen: 100
+  pop_size: 100
+  max_workers: 1
+  tabpfn_max_workers: 5
+  output_dir: results

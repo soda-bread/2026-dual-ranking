@@ -1,14 +1,12 @@
 # Offline Data-Driven Multi-Objective Optimization
 
-This repository contains experiments for offline data-driven multi-objective optimization (MOO). It has two main parts:
-
-- Benchmark experiments on engineering design problems such as `re21`-`re25`, `mo-portfolio`, `truss2d`, and `welded_beam`.
-- A Case 2 building-space optimization problem using real building operation data.
+This repository contains experiments for offline data-driven multi-objective
+optimization (MOO), using the task and metric settings in
+`paper/xue24b.pdf`.
 
 ## Repository Layout
 
 ```text
-building_space_opt/    Case 2 building-space optimization notebooks and scripts
 experiments/           Original notebooks and shared recording utilities
 external/offline-moo/  Vendored offline-moo benchmark source
 results/               Benchmark result txt/csv files
@@ -17,7 +15,15 @@ src/                   Shared data generation, model, optimization, and metric c
 
 ## Benchmark Problem Protocol
 
-For `re21`-`re25`, the current code uses the benchmark problem implementations from `external/offline-moo`.
+The configured suite contains:
+
+- two-objective ZDT1/2/3/4/6 and OmniTest;
+- VLMOP1/2 and three-objective VLMOP3;
+- three-objective DTLZ1-7;
+- RE21-25, RE31-37, MO-Portfolio, and Molecule.
+
+RE, VLMOP, MO-Portfolio, and Molecule use the implementations in
+`external/offline-moo`; ZDT, DTLZ, and OmniTest use pymoo.
 
 The true problem object is built through:
 
@@ -55,15 +61,8 @@ Current default settings are in:
 experiments/config.yaml
 ```
 
-By default, `re21`-`re25` each use:
-
-```yaml
-sample_size: 300
-train_seed: 42
-test_seed: 1
-val_size: 100
-test_size: 100
-```
+The training-size study uses sample sizes `50, 100, 200, 400, 1000`,
+offline-data seeds `1..10`, and optimization seeds `1..10`.
 
 The original offline-moo benchmark registers `RE21-Exact-v0` etc. with precomputed dataset shards such as:
 
@@ -74,7 +73,9 @@ off_moo_bench/data/re21/re21-test-x-0.npy
 off_moo_bench/data/re21/re21-test-y-0.npy
 ```
 
-Those official data files are not used by the current scripts.
+The default experiment scripts still use the existing LHS path. The independent
+small-data configuration described below loads these official training and test
+pools without quality/percentile filtering.
 
 ### True Evaluation
 
@@ -93,6 +94,57 @@ Metrics are then computed as:
 - `MSE_sur_real`: MSE between `obj` and `f_real`.
 - `HV_sur`: hypervolume computed using surrogate objectives.
 - `HV_real`: hypervolume computed using true objectives.
+- `IGD+_sur` and `IGD+_real`: IGD+ computed from surrogate and true objectives.
+
+### Metric Protocol
+
+For each offline dataset, objective values are min-max normalized with the
+training objectives only:
+
+```text
+y_norm = (y - y_train_min) / (y_train_max - y_train_min)
+```
+
+The raw HV reference point reported by Xue et al. is transformed by the same
+formula before constructing the HV indicator. No clipping is applied to final
+solutions. The same normalization is used for IGD+. IGD+ uses the problem's
+reference/true Pareto front when available. In LHS mode, a task without a true
+front uses the current offline non-dominated front and records
+`offline_non_dominated_front`. In official-pool mode, it instead uses one fixed
+non-dominated front from the complete official training pool across every N,
+seed, and method, recorded as
+`official_training_pool_non_dominated_front`.
+
+The reference paper reports HV, not IGD/IGD+, for its benchmark results because
+true Pareto fronts are unavailable for many real tasks. IGD+ here is a
+paper-compatible extension rather than a reproduced paper metric.
+
+An independent Off-MOO-Bench training-pool small-data mode is configured in
+`experiments/config_official_pool.yaml`. It leaves the default LHS mode unchanged,
+uses nested random prefixes for sample sizes 50/100/200/400/1000, and caches
+the shared subset indices under `experiments/data_subsets/`. Here N is the selected
+offline-dataset cardinality, while the optimizer population size is separately
+fixed at 100. Models fit all N rows. BNN uses an internal 20% split only to
+select its early-stopping step, then reinitializes and refits on all N rows.
+Optimizer initial populations use the complete selected N rows. The default
+official-pool optimization seeds are 1..10, matching the default LHS mode and
+remaining independently controlled from offline/model seeds 1..10. When N=50
+and `pop_size=100`, the seeded initializer samples selected rows with
+replacement while preserving the configured 100-member initial population.
+
+The official-pool configuration uses a common generation budget across
+NSGA-II, Prob-RVEA, Prob-MOEA/D, TGPR-MO, and DDMOEA-GAN: generation 1 is the
+initial population and the optimizer then executes `n_gen - 1` offspring
+generations. Actual surrogate-evaluation counts are recorded separately because
+Prob-RVEA and TGPR-MO deterministically fill empty APD reference-vector slots to
+keep a live population of 100. Prob-MOEA/D likewise uses exactly 100 reference
+directions and matching neighborhoods. Every official-pool run is checked for
+100 generations, population size 100, and 10,000 surrogate evaluations.
+Versioned result keys prevent resume from reusing results produced
+under an older official-pool termination protocol; configured generation and
+population budgets are included in the same identity.
+The legacy LHS DESDEO termination remains unchanged at 10,000 counted surrogate
+evaluations.
 
 For `RE22`-`RE25`, the second objective in the offline-moo implementation is the sum of constraint violations, not a separate physical performance objective.
 
@@ -107,86 +159,39 @@ Exp1_GPR_RBF_real_world_problem.ipynb
 Exp2_GPR_Matern_real_world_problem.ipynb
 Exp3_Autogluon_QR_real_world_problem.ipynb
 Exp4_BNN_real_world_problem.ipynb
-Exp11_Autogluon_XGBoost_real_world_problem.ipynb
-Exp12_Autogluon_Ensemble_real_world_problem.ipynb
-Exp13_TabPFN_3_real_world_problem.ipynb
+Exp5_Prob_RVEA_2022.ipynb
+Exp6_Prob_MOEAD_2022.ipynb
+Exp7_TGPR_MO_2023.ipynb
+Exp8_DDMOEA_GAN_2024.ipynb
 ```
+
+The XGBoost, Weighted Ensemble, and TabPFN surrogate implementations remain
+available through `src/models.py` and the unified sample-size runner, but they
+no longer have standalone Exp11-Exp13 notebooks. TabPFN is disabled in the
+default run plan and can be enabled explicitly with `--methods`.
+
+Run the complete default LHS plan from the repository root:
+
+```bash
+python experiments/run_all.py --dry-run
+python experiments/run_all.py --resume
+```
+
+Use `experiments/config_official_pool.yaml` for the official-pool protocol.
 
 Outputs are appended to:
 
 ```text
-results/results_real_world.csv
-results/<method_name>.txt
-```
-
-## Case 2 Building-Space Optimization
-
-The Case 2 problem is in:
-
-```text
-building_space_opt/
-```
-
-Main scripts:
-
-```text
-Case_2_TabPFN_NSGA_II.py
-Case_2_GPR_Matern_NSGA_II.py
-Case_2_GPR_Matern_Dual_Ranking_NSGA_II.py
-Case_2_initial_objectives.py
-```
-
-The scripts resolve the dataset from one of these locations:
-
-```text
-/content/drive/MyDrive/2026 Real-wrold problem/building_space_opt/Dataset
-/rds/projects/w/wangsu-building-automation/Huanbo/2026_real_world_problem/building_space_opt/Dataset
-building_space_opt/Dataset
-```
-
-The training data uses the first day of `data_office_1.csv`, i.e. the first 288 rows.
-
-Run on a server:
-
-```bash
-cd /rds/projects/w/wangsu-building-automation/Huanbo/2026_real_world_problem/building_space_opt
-python -u Case_2_GPR_Matern_NSGA_II.py
-```
-
-Run in Colab by opening the corresponding notebook:
-
-```text
-Case_2_TabPFN_NSGA_II.ipynb
-Case_2_GPR_Matern_NSGA_II.ipynb
-Case_2_GPR_Matern_Dual_Ranking_NSGA_II.ipynb
-```
-
-### Case 2 Outputs
-
-Each Case 2 method writes outputs to:
-
-```text
-building_space_opt/outputs/
-```
-
-Expected files per method:
-
-```text
-<method>_optimal_solutions.txt
-<method>_pareto_front.png
-<method>_pareto_front_zoom.png
-<method>_layout_ABC.png
-```
-
-`Case_2_initial_objectives.py` writes:
-
-```text
-outputs/case_2_initial_objectives.txt
+experiments/results/results_real_world.csv
+experiments/results/<method_name>.txt
 ```
 
 ## Notes
 
-- `re21`-`re25` are best described as real-world engineering design benchmark problems with explicit analytical oracles.
-- The Case 2 building-space problem is a real data-driven problem using measured building operation data.
+- RE problems are real-world engineering design benchmarks with explicit
+  analytical oracles.
 - In benchmark experiments, the optimizer should not directly use the true oracle during optimization; the oracle is reserved for offline data generation and final evaluation.
-- TabPFN scripts require a valid `TABPFN_TOKEN` environment variable or an already configured TabPFN client.
+- Molecule requires the optional scientific-design dependencies bundled by the
+  upstream offline-moo project.
+- Optional TabPFN credentials are read from environment variables; TabPFN is
+  disabled by default.

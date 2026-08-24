@@ -18,9 +18,11 @@ from pymoo.util.misc import from_dict
 from src.survival import Survival_standard 
 from src.opt_problem import Benchmark_Problem, EvaluatePreRealCallback, evaluate_pre_real
 from src.offline_moo_adapter import (
+    evaluate_offline_moo_objectives_and_feasibility,
     get_offline_moo_repair,
     repair_offline_moo_decisions,
 )
+from src.metrics import normalize_objectives
 
 
 class BroadcastConstraintsAsPenalty(ConstraintsAsPenalty):
@@ -109,6 +111,15 @@ def build_optimization_algorithm(
         pop_size,
         initial_population=initial_population,
     )
+    # Official-pool experiments can intentionally use fewer offline rows than
+    # the optimizer population (for example, N=50 with pop_size=100). Their
+    # deterministic initializer then samples with replacement. If pymoo removed
+    # those repeated rows, generation 1 would be undersized and the shared
+    # population/evaluation budget would be violated.
+    repeated_initial_rows = (
+        initial_population is not None
+        and len(np.unique(initial_population, axis=0)) < effective_pop_size
+    )
     optimizer_key = _normalize_optimizer_name(optimizer_name)
     crossover = SBX(prob=1.0, eta=20)
     mutation = PM(prob=1 / problem.n_var, eta=20)
@@ -124,7 +135,7 @@ def build_optimization_algorithm(
             "pop_size": effective_pop_size,
             "crossover": crossover,
             "mutation": mutation,
-            "eliminate_duplicates": True,
+            "eliminate_duplicates": not repeated_initial_rows,
             **sampling_kwargs,
         }
         if repair is not None:
@@ -134,12 +145,11 @@ def build_optimization_algorithm(
         return NSGA2(**kwargs)
 
     if optimizer_key == "moead":
-        if problem.n_obj != 2:
-            raise ValueError("MOEAD ref_dirs are configured for two-objective problems.")
         ref_dirs = get_reference_directions(
-            "uniform",
+            "energy",
             problem.n_obj,
-            n_partitions=max(effective_pop_size - 1, 1),
+            effective_pop_size,
+            seed=1,
         )
         # Use pymoo's synchronous variant so surrogate inference is evaluated
         # once per generation as a population-sized batch.
@@ -177,8 +187,17 @@ def normalized_hv(hv, F, obj_min, obj_max):
     F = np.asarray(F, dtype=float)
     if F.size == 0:
         return np.nan
-    F_normalization = (F - obj_min) / (obj_max - obj_min)
+    F_normalization = normalize_objectives(F, obj_min, obj_max)
     return float(hv.do(F_normalization))
+
+
+def normalized_igd_plus(igd_plus, F, obj_min, obj_max):
+    if igd_plus is None:
+        return np.nan
+    F = np.asarray(F, dtype=float)
+    if F.size == 0:
+        return np.nan
+    return float(igd_plus.do(normalize_objectives(F, obj_min, obj_max)))
 
 
 def non_dominated_mask(F):
@@ -383,6 +402,7 @@ def compute_surrogate_test_mse(
     use_surrogate,
     x_test,
     y_test,
+    models=None,
 ):
     surrogate_problem = Benchmark_Problem(
         model_f1=model_f1,
@@ -393,6 +413,7 @@ def compute_surrogate_test_mse(
         xu=problem.xu,
         problem_name=problem_name,
         use_surrogate=use_surrogate,
+        models=models,
     )
     f_test_pred = surrogate_problem.evaluate(
         np.asarray(x_test, dtype=float),
@@ -421,6 +442,10 @@ def run_experiment(
     mse_test=None,
     plot_seed_objectives=True,
     seed_result_callback=None,
+    models=None,
+    igd_plus_indicator=None,
+    igd_plus_source=None,
+    final_output_size=None,
 ):
 
     minimize_kwargs = dict(
@@ -444,6 +469,8 @@ def run_experiment(
 
     hv_surrogate_list = []
     hv_real_list = []
+    igd_plus_surrogate_list = []
+    igd_plus_real_list = []
     hv_real_count_list = []
     mse_test_list = []
     sur_real_mse_list = []
@@ -505,6 +532,7 @@ def run_experiment(
             xu=problem.xu,
             problem_name=problem_name,
             use_surrogate=use_surrogate,
+            models=models,
         )
 
         start_time = time.time()
@@ -535,9 +563,30 @@ def run_experiment(
         )
         end_time = time.time()
 
+        actual_evaluations = int(res.algorithm.evaluator.n_eval)
+        if final_output_size is not None:
+            expected_evaluations = int(n_gen) * int(pop_size)
+            if effective_pop_size != int(pop_size):
+                raise RuntimeError(
+                    f"Expected optimizer population {int(pop_size)}; initialized "
+                    f"{effective_pop_size}."
+                )
+            if actual_evaluations != expected_evaluations:
+                raise RuntimeError(
+                    f"Expected {expected_evaluations} surrogate evaluations; "
+                    f"got {actual_evaluations}."
+                )
+            if res.pop is None or len(res.pop) != int(final_output_size):
+                live_count = 0 if res.pop is None else len(res.pop)
+                raise RuntimeError(
+                    f"Expected final live population {int(final_output_size)}; "
+                    f"got {live_count}."
+                )
+
         no_feasible_solution = False
         no_feasible_reason = None
-        opt = res.opt
+        submitted_solution_count = 0
+        opt = res.pop if final_output_size is not None else res.opt
         solution = None if opt is None else opt.get("X")
         try:
             solution = np.asarray(solution, dtype=float)
@@ -545,8 +594,23 @@ def run_experiment(
                 raise ValueError("empty final X")
             if solution.ndim == 1:
                 solution = solution.reshape(1, -1)
+            submitted_solution_count = int(len(solution))
+            if final_output_size is not None:
+                target_size = int(final_output_size)
+                if target_size < 1:
+                    raise ValueError("final_output_size must be positive.")
+                cv = opt.get("CV")
+                if cv is not None:
+                    cv = np.asarray(cv, dtype=float).reshape(-1)
+                    feasible = np.isfinite(cv) & (cv <= 0.0)
+                    solution = solution[feasible]
+                solution = solution[:target_size]
+                if len(solution) == 0:
+                    raise ValueError("final population contains no feasible solution")
             obj = benchmark_problem_GPR.evaluate(solution, return_values_of=["F"])
-            f_real = problem.evaluate(solution, return_values_of=["F"])
+            f_real, custom_feasible = (
+                evaluate_offline_moo_objectives_and_feasibility(problem, solution)
+            )
             obj = np.asarray(obj, dtype=float)
             f_real = np.asarray(f_real, dtype=float)
             if obj.ndim == 1:
@@ -558,8 +622,10 @@ def run_experiment(
                 & np.all(np.isfinite(obj), axis=1)
                 & np.all(np.isfinite(f_real), axis=1)
             )
+            if custom_feasible is not None:
+                finite_mask &= np.asarray(custom_feasible, dtype=bool)
             if not np.any(finite_mask):
-                raise ValueError("all final candidates are non-finite")
+                raise ValueError("all final candidates are non-finite or infeasible")
             if not np.all(finite_mask):
                 solution = solution[finite_mask]
                 obj = obj[finite_mask]
@@ -569,6 +635,12 @@ def run_experiment(
             seed_mse_test = sur_real_mse if mse_test is None else float(mse_test)
             hv_real = normalized_hv(hv, f_real, obj_min, obj_max)
             hv_surrogate = normalized_hv(hv, obj, obj_min, obj_max)
+            igd_plus_real = normalized_igd_plus(
+                igd_plus_indicator, f_real, obj_min, obj_max
+            )
+            igd_plus_surrogate = normalized_igd_plus(
+                igd_plus_indicator, obj, obj_min, obj_max
+            )
             hv_bounds_check = objectives_within_hv_bounds(
                 obj,
                 f_real,
@@ -582,20 +654,26 @@ def run_experiment(
             no_feasible_reason = f"{type(err).__name__}: {err}"
             print(
                 f"Seed {seed} | no feasible final solution for metric evaluation: "
-                f"{no_feasible_reason}. Metrics set to 0."
+                f"{no_feasible_reason}. Metrics set to NaN."
             )
             solution = np.empty((0, problem.n_var))
             obj = np.empty((0, problem.n_obj))
             f_real = np.empty((0, problem.n_obj))
-            sur_real_mse = 0.0
-            seed_mse_test = 0.0
-            hv_real = 0.0
-            hv_surrogate = 0.0
+            sur_real_mse = np.nan
+            seed_mse_test = (
+                np.nan if mse_test is None else float(mse_test)
+            )
+            hv_real = np.nan
+            hv_surrogate = np.nan
+            igd_plus_real = np.nan
+            igd_plus_surrogate = np.nan
             hv_bounds_check = False
             hv_real_count = 0
 
         hv_real_list.append(hv_real)
         hv_surrogate_list.append(hv_surrogate)
+        igd_plus_real_list.append(igd_plus_real)
+        igd_plus_surrogate_list.append(igd_plus_surrogate)
         hv_real_count_list.append(hv_real_count)
         mse_test_list.append(seed_mse_test)
         sur_real_mse_list.append(sur_real_mse)
@@ -613,9 +691,11 @@ def run_experiment(
             f"MSE_sur_real: {format_result_value(sur_real_mse)} | "
             f"HV_sur: {format_result_value(hv_surrogate)} | "
             f"HV_real: {format_result_value(hv_real)} | "
+            f"IGD+_sur: {format_result_value(igd_plus_surrogate)} | "
+            f"IGD+_real: {format_result_value(igd_plus_real)} | "
             f"HV_bounds_check: {'yes' if hv_bounds_check else 'no'}"
         )
-        if plot_seed_objectives and int(seed) == 1:
+        if plot_seed_objectives and int(seed) == 1 and problem.n_obj == 2:
             plot_seed_sur_real_hv_reference(
                 obj,
                 f_real,
@@ -629,17 +709,24 @@ def run_experiment(
             "seed": seed,
             "time": end_time - start_time,
             "solution_count": hv_real_count,
+            "submitted_solution_count": submitted_solution_count,
             "mse_test": seed_mse_test,
             "mse_sur_real": sur_real_mse,
             "sur_real_mse": sur_real_mse,
             "hv_surrogate": hv_surrogate,
             "hv_bounds_check": hv_bounds_check,
             "hv_real": hv_real,
+            "igd_plus_surrogate": igd_plus_surrogate,
+            "igd_plus_real": igd_plus_real,
+            "igd_plus_source": igd_plus_source,
             "hv_real_count": hv_real_count,
+            "final_output_target": final_output_size,
             "no_feasible_solution": no_feasible_solution,
             "no_feasible_reason": no_feasible_reason,
             "normalization_info": normalization_info,
             "constraint_handling": constraint_handling,
+            "optimizer_generation_count": int(n_gen),
+            "surrogate_evaluation_count": actual_evaluations,
             "max_obj": max_obj,
             "max_f_real": max_obj_real,
         }
@@ -660,6 +747,8 @@ def run_experiment(
     return {
         "hv_surrogate_list": hv_surrogate_list,
         "hv_real_list": hv_real_list,
+        "igd_plus_surrogate_list": igd_plus_surrogate_list,
+        "igd_plus_real_list": igd_plus_real_list,
         "hv_real_count_list": hv_real_count_list,
         "mse_test_list": mse_test_list,
         "mse_sur_real_list": sur_real_mse_list,

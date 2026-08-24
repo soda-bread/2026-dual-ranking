@@ -19,10 +19,29 @@ OFFLINE_MOO_PROBLEM_NAMES = {
     "re24-exact-v0": "re24",
     "re25": "re25",
     "re25-exact-v0": "re25",
+    "re31": "re31",
+    "re31-exact-v0": "re31",
+    "re32": "re32",
+    "re32-exact-v0": "re32",
+    "re33": "re33",
+    "re33-exact-v0": "re33",
+    "re34": "re34",
+    "re34-exact-v0": "re34",
+    "re35": "re35",
+    "re35-exact-v0": "re35",
+    "re36": "re36",
+    "re36-exact-v0": "re36",
+    "re37": "re37",
+    "re37-exact-v0": "re37",
     "mo-portfolio": "portfolio",
     "mo_portfolio": "portfolio",
     "portfolio": "portfolio",
     "portfolio-exact-v0": "portfolio",
+    "molecule": "molecule",
+    "molecule-exact-v0": "molecule",
+    "vlmop1": "vlmop1",
+    "vlmop2": "vlmop2",
+    "vlmop3": "vlmop3",
 }
 
 
@@ -105,4 +124,43 @@ def repair_offline_moo_decisions(problem, X):
     if repair is None:
         return X
     X = np.asarray(X, dtype=float).copy()
-    return repair._do(problem, X)
+    # The official repair divides by each row sum after thresholding values
+    # below 1e-3.  A degenerate all-zero offspring would otherwise produce
+    # NaNs; use the neutral uniform portfolio for that pathological row.
+    X[~np.isfinite(X)] = 0.0
+    X[X < 1e-3] = 0.0
+    zero_rows = np.sum(X, axis=1) <= 0.0
+    if np.any(zero_rows):
+        X[zero_rows] = 1.0 / X.shape[1]
+    repaired = np.asarray(repair._do(problem, X), dtype=float)
+    if not np.all(np.isfinite(repaired)):
+        raise ValueError("Portfolio repair produced non-finite decisions.")
+    return repaired
+
+
+def evaluate_offline_moo_objectives_and_feasibility(problem, X):
+    """Evaluate true objectives and expose Molecule's custom feasibility flag.
+
+    Off-MOO-Bench's Molecule task writes ``out["feasible"]`` without declaring
+    a Pymoo constraint, so ``Problem.evaluate(..., ["F"])`` silently discards
+    that information.  Other tasks retain their normal evaluation path.
+    """
+
+    X = np.asarray(X, dtype=float)
+    is_molecule = (
+        is_offline_moo_problem_object(problem)
+        and getattr(problem, "name", "").strip().lower() == "molecule"
+    )
+    if not is_molecule:
+        objectives = problem.evaluate(X, return_values_of=["F"])
+        return np.asarray(objectives, dtype=float), None
+
+    out = {}
+    problem._evaluate(X, out, mode="eval")
+    objectives = np.asarray(out["F"], dtype=float)
+    feasible = np.asarray(out["feasible"]).reshape(-1).astype(bool)
+    if len(feasible) != len(X):
+        raise ValueError(
+            "Molecule feasibility output length does not match candidate count."
+        )
+    return objectives, feasible

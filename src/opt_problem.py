@@ -9,25 +9,28 @@ from pymoo.problems.multi.omnitest import OmniTest
 from pymoo.core.callback import Callback
 
 from src.real_world_problems import build_real_world_problem, is_real_world_problem
+from src.problem_specs import canonical_problem_name, get_problem_spec
 
 
 def _build_real_problem(problem_name, n_var=None, n_obj=None):
-    pname = str(problem_name).lower()
+    pname = canonical_problem_name(problem_name)
+    spec = get_problem_spec(pname)
+    n_var = spec.n_var if n_var is None else int(n_var)
+    n_obj = spec.n_obj if n_obj is None else int(n_obj)
 
     if is_real_world_problem(problem_name):
         return build_real_world_problem(problem_name)
 
     if "dtlz" in pname:
-        if n_var is None or n_obj is None:
-            raise ValueError("DTLZ problems require both n_var and n_obj.")
-        return get_problem(problem_name, n_var=n_var, n_obj=n_obj)
+        return get_problem(pname, n_var=n_var, n_obj=n_obj)
 
     if "omnitest" in pname:
-        if n_var is None:
-            raise ValueError("OmniTest requires n_var.")
         return OmniTest(n_var=n_var)
 
-    return get_problem(problem_name)
+    if pname.startswith("zdt"):
+        return get_problem(pname, n_var=n_var)
+
+    return get_problem(pname)
 
 
 def build_problem(problem_name, n_var=None, n_obj=None):
@@ -40,7 +43,18 @@ def _quiet_predict(model, X):
 
 # Problem
 class Benchmark_Problem(Problem):
-    def __init__(self, model_f1, model_f2, n_var, n_obj, xl, xu, problem_name, use_surrogate):
+    def __init__(
+        self,
+        model_f1=None,
+        model_f2=None,
+        n_var=None,
+        n_obj=None,
+        xl=None,
+        xu=None,
+        problem_name=None,
+        use_surrogate=None,
+        models=None,
+    ):
 
         self.problem = _build_real_problem(problem_name, n_var=n_var, n_obj=n_obj)
 
@@ -49,93 +63,74 @@ class Benchmark_Problem(Problem):
         super().__init__(n_var=n_var, n_obj=n_obj, xl=xl, xu=xu,
                          n_constr=n_constr)
 
-        self.model_f1 = model_f1
-        self.model_f2 = model_f2
+        if models is None:
+            models = [model for model in (model_f1, model_f2) if model is not None]
+        self.models = tuple(models)
+        if use_surrogate is not None and len(self.models) != n_obj:
+            raise ValueError(
+                f"Expected {n_obj} surrogate models, received {len(self.models)}."
+            )
+        self.model_f1 = self.models[0] if self.models else None
+        self.model_f2 = self.models[1] if len(self.models) > 1 else None
         self.use_surrogate = use_surrogate
 
     def _evaluate(self, X, out, *args, **kwargs):
         if self.use_surrogate == 'GPR_uncertainty':
-          y1_mean, y1_std = self.model_f1.predict(X)
-          y2_mean, y2_std = self.model_f2.predict(X)
-
-          y1_mean = y1_mean.reshape(-1, 1)
-          y2_mean = y2_mean.reshape(-1, 1)
-          y1_std = y1_std.reshape(-1, 1)
-          y2_std = y2_std.reshape(-1, 1)
-
-          out["F"] = np.hstack([y1_mean, y2_mean])
-          out["std"] = np.hstack([y1_std, y2_std])
+          predictions = [model.predict(X) for model in self.models]
+          out["F"] = np.column_stack([
+              np.asarray(mean, dtype=float).reshape(-1)
+              for mean, _ in predictions
+          ])
+          out["std"] = np.column_stack([
+              np.asarray(std, dtype=float).reshape(-1)
+              for _, std in predictions
+          ])
 
           if self.problem.has_constraints():
             out["G"] = self.problem.evaluate(X, return_values_of=["G"])
 
         elif self.use_surrogate == 'BNN_uncertainty':
-          y1_mean, y1_std, y1_q80, y1_q90, y1_q95 = self.model_f1.predict_distribution(X)
-          y2_mean, y2_std, y2_q80, y2_q90, y2_q95 = self.model_f2.predict_distribution(X)
-
-          y1_mean = y1_mean.reshape(-1, 1)
-          y2_mean = y2_mean.reshape(-1, 1)
-          y1_std = y1_std.reshape(-1, 1)
-          y2_std = y2_std.reshape(-1, 1)
-          y1_q80 = y1_q80.reshape(-1, 1)
-          y2_q80 = y2_q80.reshape(-1, 1)
-          y1_q90 = y1_q90.reshape(-1, 1)
-          y2_q90 = y2_q90.reshape(-1, 1)
-          y1_q95 = y1_q95.reshape(-1, 1)
-          y2_q95 = y2_q95.reshape(-1, 1)
-
-          out["F"] = np.hstack([y1_mean, y2_mean])
-          out["std"] = np.hstack([y1_std, y2_std])
-          out["F_q80"] = np.hstack([y1_q80, y2_q80])
-          out["F_q90"] = np.hstack([y1_q90, y2_q90])
-          out["F_q95"] = np.hstack([y1_q95, y2_q95])
+          predictions = [model.predict_distribution(X) for model in self.models]
+          out["F"] = np.column_stack([pred[0] for pred in predictions])
+          out["std"] = np.column_stack([pred[1] for pred in predictions])
+          out["F_q80"] = np.column_stack([pred[2] for pred in predictions])
+          out["F_q90"] = np.column_stack([pred[3] for pred in predictions])
+          out["F_q95"] = np.column_stack([pred[4] for pred in predictions])
 
           if self.problem.has_constraints():
             out["G"] = self.problem.evaluate(X, return_values_of=["G"])
 
         elif self.use_surrogate == 'QR_uncertainty':
           df_test = pd.DataFrame(X, columns=[f'x{i}' for i in range(X.shape[1])])
-
-          pred_y1 = self.model_f1.predict(df_test)
-          pred_y1.columns = [f'y_q{q}' for q in pred_y1.columns]
-          y1_q50 = pred_y1['y_q0.5'].values.reshape(-1, 1)
-          y1_q80 = pred_y1['y_q0.8'].values.reshape(-1, 1)
-          y1_q90 = pred_y1['y_q0.9'].values.reshape(-1, 1)
-          y1_q95 = pred_y1['y_q0.95'].values.reshape(-1, 1)
-
-          pred_y2 = self.model_f2.predict(df_test)
-          pred_y2.columns = [f'y_q{q}' for q in pred_y2.columns]
-          y2_q50 = pred_y2['y_q0.5'].values.reshape(-1, 1)
-          y2_q80 = pred_y2['y_q0.8'].values.reshape(-1, 1)
-          y2_q90 = pred_y2['y_q0.9'].values.reshape(-1, 1)
-          y2_q95 = pred_y2['y_q0.95'].values.reshape(-1, 1)
-
-          out["F"] = np.hstack([y1_q50, y2_q50])
-          out["F_q80"] = np.hstack([y1_q80, y2_q80])
-          out["F_q90"] = np.hstack([y1_q90, y2_q90])
-          out["F_q95"] = np.hstack([y1_q95, y2_q95])
+          predictions = []
+          for model in self.models:
+              pred = model.predict(df_test)
+              pred.columns = [f'y_q{q}' for q in pred.columns]
+              predictions.append(pred)
+          out["F"] = np.column_stack([pred['y_q0.5'].values for pred in predictions])
+          out["F_q80"] = np.column_stack([pred['y_q0.8'].values for pred in predictions])
+          out["F_q90"] = np.column_stack([pred['y_q0.9'].values for pred in predictions])
+          out["F_q95"] = np.column_stack([pred['y_q0.95'].values for pred in predictions])
 
           if self.problem.has_constraints():
             out["G"] = self.problem.evaluate(X, return_values_of=["G"])
 
         elif self.use_surrogate == 'Autogluon':
           df_test = pd.DataFrame(X, columns=[f'x{i}' for i in range(X.shape[1])])
-
-          y1_mean = np.asarray(self.model_f1.predict(df_test), dtype=float).reshape(-1, 1)
-          y2_mean = np.asarray(self.model_f2.predict(df_test), dtype=float).reshape(-1, 1)
-
-          out["F"] = np.hstack([y1_mean, y2_mean])
+          out["F"] = np.column_stack([
+              np.asarray(model.predict(df_test), dtype=float).reshape(-1)
+              for model in self.models
+          ])
 
           if self.problem.has_constraints():
             out["G"] = self.problem.evaluate(X, return_values_of=["G"])
 
         elif self.use_surrogate == 'TabPFN':
           X_test = np.asarray(X, dtype=float)
-
-          y1_mean = np.asarray(_quiet_predict(self.model_f1, X_test), dtype=float).reshape(-1, 1)
-          y2_mean = np.asarray(_quiet_predict(self.model_f2, X_test), dtype=float).reshape(-1, 1)
-
-          out["F"] = np.hstack([y1_mean, y2_mean])
+          out["F"] = np.column_stack([
+              np.asarray(_quiet_predict(model, X_test), dtype=float).reshape(-1)
+              for model in self.models
+          ])
 
           if self.problem.has_constraints():
             out["G"] = self.problem.evaluate(X, return_values_of=["G"])
@@ -202,8 +197,11 @@ class EvaluatePreRealCallback(Callback):
             self.max_f_so_far = np.maximum(self.max_f_so_far, max_f)
 
         print(f"[{self.prefix}] Generation {gen}")
-        print(f"Max f1: {self.max_f_so_far[0]:.3f}| {self.obj_max[0] * 1.1 :.3f}")
-        print(f"Max f2: {self.max_f_so_far[1]:.3f}| {self.obj_max[1] * 1.1 :.3f}")
+        for objective_index, maximum in enumerate(self.max_f_so_far, start=1):
+            print(
+                f"Max f{objective_index}: {maximum:.3f} | "
+                f"offline max {self.obj_max[objective_index - 1]:.3f}"
+            )
 
         if hv_sur is not None and hv_real is not None:
             print(f"HV sur : {hv_sur:.3f}")
@@ -265,8 +263,8 @@ def evaluate_pre_real(
 
     if pre.ndim != 2 or real.ndim != 2:
         raise ValueError("pre and real must be 2D arrays.")
-    if pre.shape[1] != 2 or real.shape[1] != 2:
-        raise ValueError("pre and real must have shape (n, 2).")
+    if pre.shape[1] != real.shape[1]:
+        raise ValueError("pre and real must have the same number of objectives.")
     if pre.shape[0] != real.shape[0]:
         raise ValueError("pre and real must have the same number of rows.")
 
@@ -287,7 +285,7 @@ def evaluate_pre_real(
         "mean_distance": np.mean(distances)
     }
 
-    if show_plot or save_svg:
+    if (show_plot or save_svg) and pre.shape[1] == 2:
         import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=figsize)
@@ -353,6 +351,10 @@ def evaluate_pre_real(
             plt.show()
         else:
             plt.close(fig)
+    elif show_plot or save_svg:
+        print(
+            f"Skipping 2D surrogate-vs-real plot for {pre.shape[1]} objectives."
+        )
 
     print(
         f"Max:  {result['max_distance']:.3f}, "

@@ -7,9 +7,41 @@ __pycache__/
 .codex_tmp/
 
 logs/
-bluebear/
+experiments/results/
+experiments/results_official_pool/
+experiments/data_subsets/
 building_space_opt/outputs/
 experiments/baseline/
+!experiments/baseline/
+experiments/baseline/*
+!experiments/baseline/__init__.py
+!experiments/baseline/batch_experiments.py
+!experiments/baseline/ddmoea_gan.py
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/
+experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/*
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/LICENSE
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/README.md
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/requirements.txt
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/desdeo_emo/
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/desdeo_emo/**
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/desdeo_problem/
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/desdeo_problem/**
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/desdeo_tools/
+!experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/desdeo_tools/**
+!experiments/baseline/TGPR-MO 2023/
+experiments/baseline/TGPR-MO 2023/*
+!experiments/baseline/TGPR-MO 2023/README.md
+!experiments/baseline/TGPR-MO 2023/pyproject.toml
+!experiments/baseline/TGPR-MO 2023/desdeo_emo/
+!experiments/baseline/TGPR-MO 2023/desdeo_emo/**
+!experiments/baseline/TGPR-MO 2023/desdeo_problem/
+!experiments/baseline/TGPR-MO 2023/desdeo_problem/**
+!experiments/baseline/TGPR-MO 2023/desdeo_tools/
+!experiments/baseline/TGPR-MO 2023/desdeo_tools/**
+!experiments/baseline/TGPR-MO 2023/framework/
+!experiments/baseline/TGPR-MO 2023/framework/**
+experiments/baseline/**/__pycache__/
+experiments/baseline/**/*.py[cod]
 
 .venv/
 venv/

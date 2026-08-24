@@ -31,6 +31,12 @@ def _summary_rows(method_name, optimizer_names, problem_names, all_results):
             )
             hv_sur_mean, hv_sur_std = _mean_std(results.get("hv_surrogate_list", []))
             hv_real_mean, hv_real_std = _mean_std(results.get("hv_real_list", []))
+            igd_plus_sur_mean, igd_plus_sur_std = _mean_std(
+                results.get("igd_plus_surrogate_list", [])
+            )
+            igd_plus_real_mean, igd_plus_real_std = _mean_std(
+                results.get("igd_plus_real_list", [])
+            )
             rows.append(
                 {
                     "timestamp": timestamp,
@@ -45,6 +51,10 @@ def _summary_rows(method_name, optimizer_names, problem_names, all_results):
                     "HV_sur_std": hv_sur_std,
                     "HV_real_mean": hv_real_mean,
                     "HV_real_std": hv_real_std,
+                    "IGD_plus_sur_mean": igd_plus_sur_mean,
+                    "IGD_plus_sur_std": igd_plus_sur_std,
+                    "IGD_plus_real_mean": igd_plus_real_mean,
+                    "IGD_plus_real_std": igd_plus_real_std,
                 }
             )
     return rows
@@ -72,6 +82,9 @@ def _seed_detail_rows(method_name, optimizer_names, problem_names, all_results):
                         ),
                         "HV_sur": detail.get("hv_surrogate"),
                         "HV_real": detail.get("hv_real"),
+                        "IGD_plus_sur": detail.get("igd_plus_surrogate"),
+                        "IGD_plus_real": detail.get("igd_plus_real"),
+                        "IGD_plus_source": detail.get("igd_plus_source"),
                         "HV_bounds_check": detail.get("hv_bounds_check"),
                         "solution_count": (
                             detail.get("solution_count")
@@ -149,6 +162,8 @@ def append_seed_txt(method_name, optimizer_names, problem_names, all_results, ou
                 "seed={seed} | time={time} | MSE_test={MSE_test} | "
                 "MSE_sur_real={MSE_sur_real} | HV_sur={HV_sur} | "
                 "HV_real={HV_real} | HV_bounds_check={HV_bounds_check} | "
+                "IGD_plus_sur={IGD_plus_sur} | IGD_plus_real={IGD_plus_real} | "
+                "IGD_plus_source={IGD_plus_source} | "
                 "solution_count={solution_count}\n".format(
                     method=row["method"],
                     optimizer=row["optimizer"],
@@ -159,6 +174,9 @@ def append_seed_txt(method_name, optimizer_names, problem_names, all_results, ou
                     MSE_sur_real=_raw_value(row["MSE_sur_real"]),
                     HV_sur=_raw_value(row["HV_sur"]),
                     HV_real=_raw_value(row["HV_real"]),
+                    IGD_plus_sur=_raw_value(row["IGD_plus_sur"]),
+                    IGD_plus_real=_raw_value(row["IGD_plus_real"]),
+                    IGD_plus_source=row["IGD_plus_source"],
                     HV_bounds_check=row["HV_bounds_check"],
                     solution_count=row["solution_count"],
                 )
@@ -181,6 +199,9 @@ def append_single_seed_txt(method_name, optimizer_name, problem_name, detail, ou
         "MSE_sur_real": detail.get("mse_sur_real", detail.get("sur_real_mse")),
         "HV_sur": detail.get("hv_surrogate"),
         "HV_real": detail.get("hv_real"),
+        "IGD_plus_sur": detail.get("igd_plus_surrogate"),
+        "IGD_plus_real": detail.get("igd_plus_real"),
+        "IGD_plus_source": detail.get("igd_plus_source"),
         "HV_bounds_check": detail.get("hv_bounds_check"),
         "solution_count": detail.get("solution_count"),
         "no_feasible_solution": detail.get("no_feasible_solution", False),
@@ -191,6 +212,8 @@ def append_single_seed_txt(method_name, optimizer_name, problem_name, detail, ou
         "seed={seed} | time={time} | MSE_test={MSE_test} | "
         "MSE_sur_real={MSE_sur_real} | HV_sur={HV_sur} | "
         "HV_real={HV_real} | HV_bounds_check={HV_bounds_check} | "
+        "IGD_plus_sur={IGD_plus_sur} | IGD_plus_real={IGD_plus_real} | "
+        "IGD_plus_source={IGD_plus_source} | "
         "solution_count={solution_count} | no_feasible_solution={no_feasible_solution} | "
         "no_feasible_reason={no_feasible_reason}\n"
     ).format(
@@ -204,6 +227,9 @@ def append_single_seed_txt(method_name, optimizer_name, problem_name, detail, ou
         MSE_sur_real=_raw_value(row["MSE_sur_real"]),
         HV_sur=_raw_value(row["HV_sur"]),
         HV_real=_raw_value(row["HV_real"]),
+        IGD_plus_sur=_raw_value(row["IGD_plus_sur"]),
+        IGD_plus_real=_raw_value(row["IGD_plus_real"]),
+        IGD_plus_source=row["IGD_plus_source"],
         HV_bounds_check=row["HV_bounds_check"],
         solution_count=row["solution_count"],
         no_feasible_solution=row["no_feasible_solution"],
@@ -258,8 +284,3 @@ def append_result_csv(
     print(formatted_table.to_string(index=False))
     print(f"Appended final result CSV to: {result_csv_path}")
     return formatted_table
-
-
-append_bluelear_result_csv = append_result_csv
-append_bluelear_seed_txt = append_seed_txt
-append_bluelear_single_seed_txt = append_single_seed_txt

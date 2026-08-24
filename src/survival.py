@@ -90,7 +90,15 @@ def find_upper_alpha(
 
 
 class Survival_dual_ranking(Survival):
-    def __init__(self, nds=None, crowding_func='cd', alpha_f1=1, alpha_f2=1, alpha=None):
+    def __init__(
+        self,
+        nds=None,
+        crowding_func='cd',
+        alpha_f1=1,
+        alpha_f2=1,
+        alpha=None,
+        alphas=None,
+    ):
         crowding_func_ = get_crowding_function(crowding_func)
         super().__init__(filter_infeasible=True)
         self.nds = nds if nds is not None else NonDominatedSorting()
@@ -98,6 +106,7 @@ class Survival_dual_ranking(Survival):
         self.alpha_f1 = alpha_f1
         self.alpha_f2 = alpha_f2
         self.alpha = alpha
+        self.alphas = None if alphas is None else np.asarray(alphas, dtype=float)
 
     def _do(self, problem, pop, *args, random_state=None, n_survive=None, **kwargs):
         F = pop.get('F').astype(float, copy=False)
@@ -113,7 +122,16 @@ class Survival_dual_ranking(Survival):
             F_hybrid = np.concatenate([F, F_upper], axis=1)
         else:
             F_std = pop.get('std').astype(float, copy=False)
-            alphas = np.array([self.alpha_f1, self.alpha_f2])
+            alphas = (
+                self.alphas
+                if self.alphas is not None
+                else np.array([self.alpha_f1, self.alpha_f2], dtype=float)
+            )
+            if alphas.shape != (F.shape[1],):
+                raise ValueError(
+                    f"Expected one dual-ranking alpha per objective; "
+                    f"received {alphas.shape[0]} for {F.shape[1]} objectives."
+                )
             F_upper = F + alphas * F_std
             F_hybrid = np.concatenate([F, F_upper], axis=1)
         fronts_hybrid = NonDominatedSorting().do(F_hybrid)
