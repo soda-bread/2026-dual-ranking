@@ -108,9 +108,10 @@ reports HV only; IGD+ is an additional normalized metric in this repository.
 All Dual Ranking uncertainty bounds use the configured one-sided quantile (0.90
 by default). GPR exposes latent/epistemic standard deviation; q80, q90, and q95
 use the matching Gaussian weights 0.8416, 1.2816, and 1.6449 instead of one
-fixed standard-deviation multiplier. QR and BNN retain the original Dual
-Ranking crossing rule: a crossed upper quantile is reflected as
-`q50 + abs(q_upper-q50)`. No empirical coverage adjustment is applied.
+fixed standard-deviation multiplier. BNN derives its standard deviation and
+q80/q90/q95 from posterior function-mean samples rather than observation
+samples. QR uses the native learned quantile without reflecting crossings. No
+empirical coverage adjustment is applied.
 
 Exp1–Exp4 train one surrogate per objective on 100% of the selected offline
 dataset. The independent test data is reserved for prediction-error reporting.

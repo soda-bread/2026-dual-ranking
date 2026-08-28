@@ -125,9 +125,11 @@ Dual Ranking uses the configured one-sided quantile (0.90 by default). GPR
 predictions use latent function variance only (`include_likelihood=False`), so
 fitted likelihood noise is not counted as epistemic uncertainty. Gaussian q80,
 q90, and q95 candidates use `mean + z_q * epistemic_std`, with weights 0.8416,
-1.2816, and 1.6449 respectively. QR and BNN retain the original Dual Ranking
-crossing rule: an upper quantile below the center is reflected as
-`center + abs(q_upper - center)`. No empirical coverage adjustment is applied.
+1.2816, and 1.6449 respectively. BNN standard deviations and quantiles are
+computed from posterior function-mean samples, excluding observation noise. QR
+uses the model's native q80/q90/q95 directly; crossed quantiles are not reflected
+or converted into heuristic upper bounds. No empirical coverage adjustment is
+applied.
 
 The standalone Exp1–Exp4 entry points train one surrogate per objective using
 100% of the selected offline dataset. The independent test set is used only to

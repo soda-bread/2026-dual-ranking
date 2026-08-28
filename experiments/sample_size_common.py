@@ -46,8 +46,8 @@ TRAIN_SIZES = (50, 100, 200, 400, 1000)
 LHS_SEEDS = tuple(range(1, 11))
 OPT_SEEDS = tuple(range(1, 11))
 TEST_SIZE = 100
-LHS_PROTOCOL_VERSION = "lhs_full_offline_fixed_quantile_v5"
-OFFICIAL_PROTOCOL_VERSION = "official_pool_full_offline_fixed_quantile_v9"
+LHS_PROTOCOL_VERSION = "lhs_full_offline_native_quantile_v6"
+OFFICIAL_PROTOCOL_VERSION = "official_pool_full_offline_native_quantile_v10"
 
 
 def current_protocol_version(dataset_source):

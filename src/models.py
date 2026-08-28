@@ -625,29 +625,27 @@ class BNNRegressor:
                     self.model,
                     guide=self.guide,
                     num_samples=sample_count,
-                    return_sites=("mean", "obs"),
+                    return_sites=("mean",),
                 )
                 with torch.no_grad():
                     samples = predictive(X_tensor)
                     mean_samples = samples["mean"].detach().cpu().numpy()
-                    obs_samples = samples["obs"].detach().cpu().numpy()
 
         mean_samples = self.target_scaler.inverse_transform(
             mean_samples.reshape(-1, 1)
         ).reshape(mean_samples.shape)
-        obs_samples = self.target_scaler.inverse_transform(
-            obs_samples.reshape(-1, 1)
-        ).reshape(obs_samples.shape)
-        return mean_samples, obs_samples
+        return mean_samples
 
     def predict_distribution(self, X, num_samples=None):
-        mean_samples, obs_samples = self._predictive_samples(X, num_samples=num_samples)
+        # Posterior function samples isolate epistemic uncertainty. Observation
+        # samples would additionally contain the learned likelihood noise.
+        mean_samples = self._predictive_samples(X, num_samples=num_samples)
         predictions = (
             mean_samples.mean(axis=0),
-            obs_samples.std(axis=0),
-            np.percentile(obs_samples, 80, axis=0),
-            np.percentile(obs_samples, 90, axis=0),
-            np.percentile(obs_samples, 95, axis=0),
+            mean_samples.std(axis=0),
+            np.percentile(mean_samples, 80, axis=0),
+            np.percentile(mean_samples, 90, axis=0),
+            np.percentile(mean_samples, 95, axis=0),
         )
         return tuple(np.asarray(values).reshape(-1) for values in predictions)
 

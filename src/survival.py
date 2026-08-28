@@ -4,9 +4,6 @@ from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from pymoo.util.randomized_argsort import randomized_argsort
 from pymoo.operators.survival.rank_and_crowding.metrics import get_crowding_function
 
-from src.uncertainty import reflect_upper_quantile
-
-
 class Survival_standard(Survival):
     def __init__(self, nds=None, crowding_func='cd'):
         crowding_func_ = get_crowding_function(crowding_func)
@@ -65,10 +62,18 @@ class Survival_dual_ranking(Survival):
             elif self.alpha == 0.95:
                 raw_upper = pop.get('F_q95').astype(float, copy=False)
             else:
-                raise ValueError("alpha must be one of 0.8, 0.9, 0.95 for QR dual-ranking.")
-            # Preserve the original dual-ranking construction when a learned
-            # upper quantile crosses the center.
-            F_upper = reflect_upper_quantile(F, raw_upper)
+                raise ValueError(
+                    "alpha must be one of 0.8, 0.9, 0.95 for quantile dual-ranking."
+                )
+            if raw_upper.shape != F.shape:
+                raise ValueError(
+                    "Upper-quantile predictions must match the objective shape."
+                )
+            if not np.all(np.isfinite(raw_upper)):
+                raise ValueError("Upper-quantile predictions must be finite.")
+            # Use the model's quantile directly. Quantile crossing is not
+            # reflected or otherwise converted into a heuristic upper bound.
+            F_upper = raw_upper
             F_hybrid = np.concatenate([F, F_upper], axis=1)
         else:
             F_std = pop.get('std').astype(float, copy=False)

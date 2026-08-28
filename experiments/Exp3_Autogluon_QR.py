@@ -387,7 +387,7 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
         optimizer_name = optimizer_spec["optimizer_name"]
         if optimizer_spec["use_dual_ranking"]:
             if dual_ranking_survival is None:
-                print(f"Dual-ranking raw reflected q={dual_ranking_quantile:.3f}")
+                print(f"Dual-ranking native QR q={dual_ranking_quantile:.3f}")
                 dual_ranking_survival = Survival_dual_ranking(
                     alpha=dual_ranking_quantile,
                 )

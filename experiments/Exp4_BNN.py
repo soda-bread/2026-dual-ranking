@@ -401,7 +401,7 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
                     raise ValueError(
                         "dual_ranking_quantile must be one of 0.8, 0.9, 0.95."
                     )
-                print(f"Dual-ranking raw reflected q={quantile:.3f}")
+                print(f"Dual-ranking epistemic BNN q={quantile:.3f}")
                 dual_ranking_survival = Survival_dual_ranking(
                     alpha=quantile,
                 )
