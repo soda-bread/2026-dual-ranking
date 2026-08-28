@@ -36,9 +36,6 @@ problem_names:
 n_gen: 100
 pop_size: 100
 
-dual_ranking_target_coverage: 0.90
-dual_ranking_alpha_max: 500.0
-dual_ranking_alpha_step: 0.01
 dual_ranking_quantile: 0.90
 
 sample_size_ablation:
@@ -47,14 +44,6 @@ sample_size_ablation:
   offline_sample_sizes: [50, 100, 200, 400, 1000]
   offline_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   optimization_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-
-  # This split is performed only inside each selected N-sample subset.
-  # The official test pool is never used for fitting or calibration.
-  validation_fraction: 0.20
-
-  # Every surrogate's delivered model is fitted on all N selected rows.  BNN
-  # uses the internal split only to choose its early-stopping step, then refits
-  # from scratch on all N rows.
 
   n_gen: 100
   pop_size: 100

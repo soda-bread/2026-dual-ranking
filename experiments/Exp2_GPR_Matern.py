@@ -1,5 +1,5 @@
-# Auto-generated from Exp3_Autogluon_QR_real_world_problem.ipynb.
-# Run with: python Exp3_Autogluon_QR_real_world_problem.py
+# Auto-generated from Exp2_GPR_Matern.ipynb.
+# Run with: python Exp2_GPR_Matern.py
 
 from pathlib import Path as _ExperimentsPath
 import atexit as _experiments_atexit
@@ -11,7 +11,7 @@ EXPERIMENTS_RESULTS_DIR = EXPERIMENTS_DIR / "results"
 EXPERIMENTS_LOG_DIR.mkdir(parents=True, exist_ok=True)
 EXPERIMENTS_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-_EXPERIMENTS_METHOD_NAME = "Autogluon_QR"
+_EXPERIMENTS_METHOD_NAME = "GPR_Matern"
 _EXPERIMENTS_LOG_PATH = EXPERIMENTS_LOG_DIR / (_EXPERIMENTS_METHOD_NAME + ".log")
 _EXPERIMENTS_LOG_FILE = open(_EXPERIMENTS_LOG_PATH, "a", encoding="utf-8", buffering=1)
 _EXPERIMENTS_STDOUT = _experiments_sys.stdout
@@ -50,11 +50,12 @@ _experiments_atexit.register(_close_experiments_log)
 print(f"[experiments] logging to: {_EXPERIMENTS_LOG_PATH}")
 print(f"[experiments] results dir: {EXPERIMENTS_RESULTS_DIR}")
 
-# # Exp3 Autogluon QR real-world problem
+# # Exp2 GPR Matern real-world problem
 #
-# Run Autogluon-QR across the configured real-world problems and print one summary block per problem.
+# Run GPR(Matern) across the configured real-world problems and print one summary block per problem.
 
 # ### **Package**
+#
 
 
 # ---- notebook cell 2 ----
@@ -92,10 +93,6 @@ DEPENDENCIES = {
     'GPy': {
         'pip': 'GPy',
         'checks': ('GPy',),
-    },
-    'autogluon.tabular': {
-        'pip': 'autogluon.tabular',
-        'checks': ('autogluon.tabular',),
     },
     'yaml': {
         'pip': 'pyyaml',
@@ -184,18 +181,21 @@ from src.experiment import (
     run_experiment,
 )
 from src.metrics import get_igd_plus, get_metrics
-from src.models import autogluon_qr_fit_predict, autogluon_qr_pred_mean_quantiles, train_autogluon_qr_models_for_calibration
+from src.models import GPR_Matern, gpr_pred_mean_std, train_gpr_models
 from src.opt_problem import build_problem
 from src.other_functions import mean_std
 from result_recording import append_result_csv
 from src.survival import Survival_dual_ranking, Survival_standard
+from src.uncertainty import gaussian_upper_scale
 
 warnings.filterwarnings("ignore", message=".*load_learner.*pickle.*")
 np.set_printoptions(precision=3, suppress=True)
 
 # ### **Main**
+#
 
 # ###### 1. Initial settings
+#
 
 
 # ---- notebook cell 5 ----
@@ -256,17 +256,18 @@ optimizer_run_specs = [
 ]
 optimizer_names = [spec["result_name"] for spec in optimizer_run_specs]
 dual_ranking_quantile = experiment_config.get("dual_ranking_quantile", 0.90)
-method_name = "Autogluon_QR"
+method_name = "GPR_Matern"
 
 print(f"Loaded experiment config: {config_path}")
 print(f"Problems: {len(problem_names)} | seeds: range({seed_start}, {seed_end}) | n_gen: {n_gen} | pop_size: {pop_size}")
 print(f"Optimizers: {optimizer_names}")
 
 # ###### 2. Surrogate model and summary functions
+#
 
 
 # ---- notebook cell 7 ----
-use_surrogate = "QR_uncertainty"
+use_surrogate = "GPR_uncertainty"
 
 
 
@@ -274,10 +275,11 @@ use_surrogate = "QR_uncertainty"
 def reset_experiment_random_state(seed, label=None):
     seed = int(seed)
     np.random.seed(seed)
-def train_model_for_calibration(problem, sample_size, train_seed=42, test_seed=1):
-    return train_autogluon_qr_models_for_calibration(
+def train_model(problem, sample_size, train_seed=42, test_seed=1):
+    return train_gpr_models(
         problem=problem,
         sample_size=sample_size,
+        kernel="matern",
         train_seed=train_seed,
         test_seed=test_seed,
     )
@@ -340,14 +342,14 @@ def print_problem_result(problem_name, optimizer_name, results):
 
 def run_problem(problem_name, sample_size_override=None, result_problem_name=None):
     result_problem_name = result_problem_name or problem_name
-    current_use_surrogate = "QR_uncertainty"
+    current_use_surrogate = "GPR_uncertainty"
     reset_experiment_random_state(train_seed, f"{problem_name} surrogate/data")
     problem = build_benchmark_problem(
         problem_name,
     )
     current_sample_size = int(sample_size_override) if sample_size_override is not None else get_training_sample_sizes(problem_name, problem)[0]
     print(f"[{result_problem_name}] training sample size: {current_sample_size}")
-    models, X_train, y_train, X_val, y_val, X_test, y_test = train_model_for_calibration(
+    models, X_train, y_train, X_test, y_test = train_model(
         problem=problem,
         sample_size=current_sample_size,
         train_seed=train_seed,
@@ -387,8 +389,11 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
         optimizer_name = optimizer_spec["optimizer_name"]
         if optimizer_spec["use_dual_ranking"]:
             if dual_ranking_survival is None:
-                print(f"Dual-ranking upper quantile: q={dual_ranking_quantile:.3f}")
-                dual_ranking_survival = Survival_dual_ranking(alpha=dual_ranking_quantile)
+                scale = gaussian_upper_scale(dual_ranking_quantile)
+                print(f"Dual-ranking Gaussian q={dual_ranking_quantile:.3f}: z={scale:.6f}")
+                dual_ranking_survival = Survival_dual_ranking(
+                    alphas=[scale] * len(models),
+                )
             survival_function = dual_ranking_survival
         else:
             survival_function = Survival_standard()
@@ -425,6 +430,7 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
     return problem_results
 
 # ###### 3. Batch optimization
+#
 
 
 # ---- notebook cell 10 ----

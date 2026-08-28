@@ -20,7 +20,7 @@ The executable `Exp*.py` files were generated from their matching notebooks.
 Run one experiment, for example:
 
 ```bash
-python Exp1_GPR_RBF_real_world_problem.py
+python Exp1_GPR_RBF.py
 ```
 
 Each script streams stdout/stderr to the terminal and appends the same content to `logs/<method_name>.log`.
@@ -32,8 +32,9 @@ Each script also appends one raw per-seed record per problem to:
 
 - `results/<method_name>.txt`
 
-`config.yaml` is the canonical default configuration. Edit it to change problem
-lists, seeds, population size, or sample sizes.
+`config.yaml` is the canonical default configuration. Standalone Exp1-Exp4
+runs use `N=100` for every problem. Edit it to change problem lists, seeds,
+population size, or sample sizes.
 
 Standalone Exp11-Exp13 scripts have been removed. Their XGBoost, Weighted
 Ensemble, and TabPFN surrogate implementations remain registered in
@@ -104,6 +105,16 @@ transform. IGD+ uses a true/reference front when supplied by the problem and
 otherwise records an offline non-dominated-front fallback. The paper itself
 reports HV only; IGD+ is an additional normalized metric in this repository.
 
+All Dual Ranking uncertainty bounds use the configured one-sided quantile (0.90
+by default). GPR exposes latent/epistemic standard deviation; q80, q90, and q95
+use the matching Gaussian weights 0.8416, 1.2816, and 1.6449 instead of one
+fixed standard-deviation multiplier. QR and BNN retain the original Dual
+Ranking crossing rule: a crossed upper quantile is reflected as
+`q50 + abs(q_upper-q50)`. No empirical coverage adjustment is applied.
+
+Exp1–Exp4 train one surrogate per objective on 100% of the selected offline
+dataset. The independent test data is reserved for prediction-error reporting.
+
 ## Official Off-MOO training-pool mode
 
 `config_official_pool.yaml` enables the independent small-data mode. The
@@ -140,17 +151,16 @@ data_subsets/{problem}/offline_seed_{seed}/
 Every `indices_N*.npy` is a prefix of the same permutation, so the configured
 offline datasets are nested. Here, `N` always means the number of selected
 official training-pool rows; it is distinct from the optimizer population size,
-which is configured separately as `pop_size=100`. Every delivered surrogate is
-fitted on all N selected rows. For BNN only, a 20% internal split first chooses
-the early-stopping step, after which the BNN is reinitialized and refitted on
-all N rows for that fixed number of steps. Optimization-seeded initial
+which is configured separately as `pop_size=100`. Every surrogate and baseline
+fits all N selected rows.
+Optimization-seeded initial
 populations are also drawn from the complete selected N rows. When N=50 and
 `pop_size=100`, the deterministic draw uses replacement and preserves all 100
 initial-population entries. The complete
 official test pool is used only for prediction-reliability evaluation. For problems
 without a true Pareto front, IGD+ uses the fixed non-dominated front of the
 official training pool for evaluation only; it is not used by training,
-surrogate normalization, calibration, or optimization. Offline/model
+surrogate normalization, uncertainty construction, or optimization. Offline/model
 seed and optimization seed are recorded separately, and optimization-seeded
 initial populations are shared across methods.
 
@@ -165,7 +175,7 @@ default `n_gen=100` and `pop_size=100`, every method is checked for exactly
 10,000 surrogate evaluations. Raw result rows record both counters. Legacy LHS mode
 retains the original 10,000-FE termination for the DESDEO baselines.
 `protocol_version` is part of every resume/result key, so unversioned results
-from an older official-pool termination protocol are rerun instead of mixed.
+and results from the older uncertainty protocol are rerun instead of mixed.
 Configured `n_gen` and `pop_size` are also part of that identity, so CLI budget
 overrides cannot accidentally reuse results from another optimizer budget.
 

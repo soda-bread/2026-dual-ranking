@@ -1,18 +1,9 @@
-# Auto-generated from Exp4_BNN_real_world_problem.ipynb.
-# Run with: python Exp4_BNN_real_world_problem.py
+# Auto-generated from Exp3_Autogluon_QR.ipynb.
+# Run with: python Exp3_Autogluon_QR.py
 
 from pathlib import Path as _ExperimentsPath
 import atexit as _experiments_atexit
-import os as _experiments_os
 import sys as _experiments_sys
-
-for _experiments_thread_env in (
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-):
-    _experiments_os.environ.setdefault(_experiments_thread_env, "1")
 
 EXPERIMENTS_DIR = _ExperimentsPath(__file__).resolve().parent
 EXPERIMENTS_LOG_DIR = EXPERIMENTS_DIR / "logs"
@@ -20,7 +11,7 @@ EXPERIMENTS_RESULTS_DIR = EXPERIMENTS_DIR / "results"
 EXPERIMENTS_LOG_DIR.mkdir(parents=True, exist_ok=True)
 EXPERIMENTS_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-_EXPERIMENTS_METHOD_NAME = "BNN"
+_EXPERIMENTS_METHOD_NAME = "Autogluon_QR"
 _EXPERIMENTS_LOG_PATH = EXPERIMENTS_LOG_DIR / (_EXPERIMENTS_METHOD_NAME + ".log")
 _EXPERIMENTS_LOG_FILE = open(_EXPERIMENTS_LOG_PATH, "a", encoding="utf-8", buffering=1)
 _EXPERIMENTS_STDOUT = _experiments_sys.stdout
@@ -59,9 +50,9 @@ _experiments_atexit.register(_close_experiments_log)
 print(f"[experiments] logging to: {_EXPERIMENTS_LOG_PATH}")
 print(f"[experiments] results dir: {EXPERIMENTS_RESULTS_DIR}")
 
-# # Exp4 BNN real-world problem
+# # Exp3 Autogluon QR real-world problem
 #
-# Run BNN across the configured real-world problems and print one summary block per problem.
+# Run Autogluon-QR across the configured real-world problems and print one summary block per problem.
 
 # ### **Package**
 
@@ -98,9 +89,13 @@ DEPENDENCIES = {
         'checks': ('pymoo', 'pymoo.gradient.toolbox', 'pymoo.core.problem', 'pymoo.operators.sampling.lhs'),
         'pip_args': ('--force-reinstall',),
     },
-    'pyro': {
-        'pip': 'pyro-ppl',
-        'checks': ('torch', 'pyro'),
+    'GPy': {
+        'pip': 'GPy',
+        'checks': ('GPy',),
+    },
+    'autogluon.tabular': {
+        'pip': 'autogluon.tabular',
+        'checks': ('autogluon.tabular',),
     },
     'yaml': {
         'pip': 'pyyaml',
@@ -109,6 +104,10 @@ DEPENDENCIES = {
     'pandas': {
         'pip': 'pandas',
         'checks': ('pandas',),
+    },
+    'torch': {
+        'pip': 'torch',
+        'checks': ('torch',),
     },
     'scipy': {
         'pip': 'scipy',
@@ -185,7 +184,7 @@ from src.experiment import (
     run_experiment,
 )
 from src.metrics import get_igd_plus, get_metrics
-from src.models import BNNRegressor, bnn_pred_mean_quantiles, train_bnn_models_for_calibration
+from src.models import autogluon_qr_fit_predict, autogluon_qr_pred_mean_quantiles, train_autogluon_qr_models
 from src.opt_problem import build_problem
 from src.other_functions import mean_std
 from result_recording import append_result_csv
@@ -257,7 +256,7 @@ optimizer_run_specs = [
 ]
 optimizer_names = [spec["result_name"] for spec in optimizer_run_specs]
 dual_ranking_quantile = experiment_config.get("dual_ranking_quantile", 0.90)
-method_name = "BNN"
+method_name = "Autogluon_QR"
 
 print(f"Loaded experiment config: {config_path}")
 print(f"Problems: {len(problem_names)} | seeds: range({seed_start}, {seed_end}) | n_gen: {n_gen} | pop_size: {pop_size}")
@@ -267,12 +266,7 @@ print(f"Optimizers: {optimizer_names}")
 
 
 # ---- notebook cell 7 ----
-use_surrogate = "BNN_uncertainty"
-bnn_hidden = (6, 3)
-bnn_lr = 5e-4
-bnn_max_steps = 50000
-bnn_patience = 15
-bnn_fixed_sigma = 0.05
+use_surrogate = "QR_uncertainty"
 
 
 
@@ -280,17 +274,12 @@ bnn_fixed_sigma = 0.05
 def reset_experiment_random_state(seed, label=None):
     seed = int(seed)
     np.random.seed(seed)
-def train_model_for_calibration(problem, sample_size, train_seed=42, test_seed=1):
-    return train_bnn_models_for_calibration(
+def train_model(problem, sample_size, train_seed=42, test_seed=1):
+    return train_autogluon_qr_models(
         problem=problem,
         sample_size=sample_size,
         train_seed=train_seed,
         test_seed=test_seed,
-        hidden=bnn_hidden,
-        lr=bnn_lr,
-        max_steps=bnn_max_steps,
-        patience=bnn_patience,
-        fixed_sigma=bnn_fixed_sigma,
     )
 
 
@@ -351,14 +340,14 @@ def print_problem_result(problem_name, optimizer_name, results):
 
 def run_problem(problem_name, sample_size_override=None, result_problem_name=None):
     result_problem_name = result_problem_name or problem_name
-    current_use_surrogate = "BNN_uncertainty"
+    current_use_surrogate = "QR_uncertainty"
     reset_experiment_random_state(train_seed, f"{problem_name} surrogate/data")
     problem = build_benchmark_problem(
         problem_name,
     )
     current_sample_size = int(sample_size_override) if sample_size_override is not None else get_training_sample_sizes(problem_name, problem)[0]
     print(f"[{result_problem_name}] training sample size: {current_sample_size}")
-    models, X_train, y_train, X_val, y_val, X_test, y_test = train_model_for_calibration(
+    models, X_train, y_train, X_test, y_test = train_model(
         problem=problem,
         sample_size=current_sample_size,
         train_seed=train_seed,
@@ -398,8 +387,10 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
         optimizer_name = optimizer_spec["optimizer_name"]
         if optimizer_spec["use_dual_ranking"]:
             if dual_ranking_survival is None:
-                print(f"Dual-ranking upper quantile: q={dual_ranking_quantile:.3f}")
-                dual_ranking_survival = Survival_dual_ranking(alpha=dual_ranking_quantile)
+                print(f"Dual-ranking raw reflected q={dual_ranking_quantile:.3f}")
+                dual_ranking_survival = Survival_dual_ranking(
+                    alpha=dual_ranking_quantile,
+                )
             survival_function = dual_ranking_survival
         else:
             survival_function = Survival_standard()
@@ -439,68 +430,12 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
 
 
 # ---- notebook cell 10 ----
-import concurrent.futures
 import gc
-import multiprocessing as mp
-
-EXPERIMENTS_MAX_PROBLEM_WORKERS = 4
-
-
-def _sanitize_parallel_results(problem_results):
-    sanitized = {}
-    for optimizer_name, results in problem_results.items():
-        run_details = []
-        for detail in results.get("run_details", []):
-            run_details.append(
-                {
-                    "seed": detail.get("seed"),
-                    "time": detail.get("time"),
-                    "mse_test": detail.get("mse_test"),
-                    "offline_test_mse": detail.get("offline_test_mse", detail.get("mse_test")),
-                    "mse_sur_real": detail.get("mse_sur_real", detail.get("sur_real_mse")),
-                    "sur_real_mse": detail.get("mse_sur_real", detail.get("sur_real_mse")),
-                    "hv_surrogate": detail.get("hv_surrogate"),
-                    "hv_real": detail.get("hv_real"),
-                    "hv_bounds_check": detail.get("hv_bounds_check"),
-                    "solution_count": detail.get("solution_count"),
-                    "no_feasible_solution": detail.get("no_feasible_solution", False),
-                    "no_feasible_reason": detail.get("no_feasible_reason"),
-                }
-            )
-        sanitized[optimizer_name] = {
-            "hv_surrogate_list": list(results.get("hv_surrogate_list", [])),
-            "hv_real_list": list(results.get("hv_real_list", [])),
-            "hv_real_count_list": list(results.get("hv_real_count_list", [])),
-            "mse_test_list": list(results.get("mse_test_list", [])),
-            "mse_sur_real_list": list(results.get("mse_sur_real_list", results.get("sur_real_mse_list", []))),
-            "sur_real_mse_list": list(results.get("mse_sur_real_list", results.get("sur_real_mse_list", []))),
-            "run_details": run_details,
-        }
-    return sanitized
-
-
-def _run_problem_task(task):
-    try:
-        import torch
-
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
-    except Exception:
-        pass
-    problem_name, configured_sample_size, result_problem_name = task
-    problem_results = run_problem(
-        problem_name,
-        sample_size_override=configured_sample_size,
-        result_problem_name=result_problem_name,
-    )
-    return result_problem_name, _sanitize_parallel_results(problem_results)
-
 
 all_results = {}
 metrics_summary_tables = []
 result_problem_names = []
 result_csv_path = EXPERIMENTS_RESULTS_DIR / "results_real_world.csv"
-problem_tasks = []
 
 for problem_index, problem_name in enumerate(problem_names, start=1):
     problem = build_benchmark_problem(
@@ -513,43 +448,26 @@ for problem_index, problem_name in enumerate(problem_names, start=1):
             if len(configured_sample_sizes) == 1
             else f"{problem_name}_n{configured_sample_size}"
         )
-        problem_tasks.append((problem_name, configured_sample_size, result_problem_name))
-    del problem
-
-worker_count = min(EXPERIMENTS_MAX_PROBLEM_WORKERS, len(problem_tasks))
-print(f"[experiments] running {method_name} problems with {worker_count} worker processes")
-
-
-def _record_problem_result(result_problem_name, problem_results):
-    result_problem_names.append(result_problem_name)
-    one_problem_results = {result_problem_name: problem_results}
-    metrics_summary_tables.append(
-        append_result_csv(
-            method_name=method_name,
-            optimizer_names=optimizer_names,
-            problem_names=[result_problem_name],
-            all_results=one_problem_results,
-            result_csv_path=result_csv_path,
+        problem_results = run_problem(
+            problem_name,
+            sample_size_override=configured_sample_size,
+            result_problem_name=result_problem_name,
         )
-    )
-    del one_problem_results, problem_results
+        result_problem_names.append(result_problem_name)
+        one_problem_results = {result_problem_name: problem_results}
+        metrics_summary_tables.append(
+            append_result_csv(
+                method_name=method_name,
+                optimizer_names=optimizer_names,
+                problem_names=[result_problem_name],
+                all_results=one_problem_results,
+                result_csv_path=result_csv_path,
+            )
+        )
+        del one_problem_results, problem_results
+        gc.collect()
+    del problem
     gc.collect()
-
-
-if worker_count <= 1:
-    for task in problem_tasks:
-        _record_problem_result(*_run_problem_task(task))
-else:
-    mp_context = mp.get_context("fork")
-    with concurrent.futures.ProcessPoolExecutor(
-        max_workers=worker_count,
-        mp_context=mp_context,
-    ) as executor:
-        future_to_task = {executor.submit(_run_problem_task, task): task for task in problem_tasks}
-        for future in concurrent.futures.as_completed(future_to_task):
-            _record_problem_result(*future.result())
-
-gc.collect()
 
 problem_names = result_problem_names
 if metrics_summary_tables:

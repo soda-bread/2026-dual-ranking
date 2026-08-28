@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 from sample_size_common import (
-    LHS_SEEDS, METHOD_REGISTRY, OPT_SEEDS, PROBLEMS, TRAIN_SIZES, VALIDATION_SIZE, TEST_SIZE,
+    LHS_SEEDS, METHOD_REGISTRY, OPT_SEEDS, PROBLEMS, TRAIN_SIZES, TEST_SIZE,
     append_rows, cleanup_model_storage, load_config_file, organize_cache_files,
     current_protocol_version, read_result_rows, reconcile_result_csvs,
     result_optimizer_settings, result_protocol_version, run_group,
@@ -103,7 +103,6 @@ def parse_args(argv=None):
     cli_offline_seeds = args.offline_seeds or args.lhs_seeds
     args.lhs_seeds = comma_values(cli_offline_seeds, int) or list(configured_offline_seeds)
     args.opt_seeds = comma_values(args.opt_seeds, int) or list(configured_opt_seeds)
-    args.validation_fraction = float(config.get("validation_fraction", 0.2))
     args.n_gen = args.n_gen if args.n_gen is not None else int(config.get("n_gen", root_config.get("n_gen", 100)))
     args.pop_size = args.pop_size if args.pop_size is not None else int(config.get("pop_size", root_config.get("pop_size", 100)))
     args.max_workers = args.max_workers if args.max_workers is not None else int(config.get("max_workers", 1))
@@ -138,8 +137,6 @@ def parse_args(argv=None):
         parser.error("--pop-size must be at least 2")
     if args.dataset_source not in {"lhs", "official_pool"}:
         parser.error("dataset_source must be 'lhs' or 'official_pool'")
-    if not 0.0 < args.validation_fraction < 1.0:
-        parser.error("validation_fraction must be in (0, 1)")
     return args
 
 
@@ -277,7 +274,6 @@ def _execute(payload):
         dataset_source,
         subset_cache_dir,
         all_sample_sizes,
-        validation_fraction,
     ) = payload
     log_name = (
         f"{_safe_log_component(problem)}_N{size}_lhs{lhs_seed}_"
@@ -305,7 +301,6 @@ def _execute(payload):
                 dataset_source=dataset_source,
                 subset_cache_root=Path(subset_cache_dir),
                 all_sample_sizes=all_sample_sizes,
-                validation_fraction=validation_fraction,
             )
         except Exception:
             _release_worker_memory()
@@ -364,14 +359,6 @@ def main(argv=None):
         "problems": args.problems, "methods": args.methods,
         "train_sizes": args.train_sizes, "offline_seeds": args.lhs_seeds,
         "opt_seeds": args.opt_seeds,
-        "validation_size": (
-            None if args.dataset_source == "official_pool" else VALIDATION_SIZE
-        ),
-        "validation_source": (
-            "within_selected_training_subset"
-            if args.dataset_source == "official_pool"
-            else "fixed_independent_lhs"
-        ),
         "test_size": (
             "official_test_pool"
             if args.dataset_source == "official_pool"
@@ -379,7 +366,6 @@ def main(argv=None):
         ),
         "n_gen": args.n_gen,
         "pop_size": args.pop_size, "total_tasks": total,
-        "validation_fraction": args.validation_fraction,
         "max_workers": args.max_workers,
         "tabpfn_max_workers": args.tabpfn_max_workers,
     })
@@ -392,7 +378,6 @@ def main(argv=None):
             args.dataset_source,
             str(args.subset_cache_dir),
             tuple(args.train_sizes),
-            args.validation_fraction,
         )
         for group in groups
     ]

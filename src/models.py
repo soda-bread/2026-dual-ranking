@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-
 TABPFN_CONFIG_PATH = Path(__file__).resolve().parents[1] / "experiments" / "config.yaml"
 _TABPFN_CONFIG_TOKENS = None
 _TABPFN_CONFIG_NAMES = (
@@ -154,14 +153,14 @@ class GPR_RBF:
         self.model.Gaussian_noise.variance = optimized_noise
 
     def predict(self, X):
-        y_mean, y_var = self.model.predict(X, include_likelihood=True)
+        """Predict the latent function and epistemic standard deviation."""
+        y_mean, y_var = self.model.predict(X, include_likelihood=False)
         y_std = _safe_std_from_variance(y_var)
         return y_mean.flatten(), y_std.flatten()
 
     def predict_noiseless(self, X):
-        y_mean, y_var = self.model.predict(X, include_likelihood=False)
-        y_std = _safe_std_from_variance(y_var)
-        return y_mean.flatten(), y_std.flatten()
+        """Backward-compatible alias for the default epistemic prediction."""
+        return self.predict(X)
 
 
 class GPR_Matern:
@@ -176,22 +175,19 @@ class GPR_Matern:
         self.model.optimize(messages=False)
 
     def predict(self, X):
-        y_mean, y_var = self.model.predict(X, include_likelihood=True)
-        y_std = _safe_std_from_variance(y_var)
-        return y_mean.flatten(), y_std.flatten()
-
-    def predict_noiseless(self, X):
+        """Predict the latent function and epistemic standard deviation."""
         y_mean, y_var = self.model.predict(X, include_likelihood=False)
         y_std = _safe_std_from_variance(y_var)
         return y_mean.flatten(), y_std.flatten()
 
-def gpr_pred_mean_std(model_f1, model_f2, X_test, noiseless=False, verbose=True):
-    if noiseless:
-        mean_f1, std_f1 = model_f1.predict_noiseless(X_test)
-        mean_f2, std_f2 = model_f2.predict_noiseless(X_test)
-    else:
-        mean_f1, std_f1 = model_f1.predict(X_test)
-        mean_f2, std_f2 = model_f2.predict(X_test)
+    def predict_noiseless(self, X):
+        """Backward-compatible alias for the default epistemic prediction."""
+        return self.predict(X)
+
+
+def gpr_pred_mean_std(model_f1, model_f2, X_test, verbose=True):
+    mean_f1, std_f1 = model_f1.predict(X_test)
+    mean_f2, std_f2 = model_f2.predict(X_test)
 
     mean_f1 = np.asarray(mean_f1).reshape(-1)
     std_f1 = np.asarray(std_f1).reshape(-1)
@@ -200,9 +196,6 @@ def gpr_pred_mean_std(model_f1, model_f2, X_test, noiseless=False, verbose=True)
 
     pred_mean = np.stack([mean_f1, mean_f2], axis=1)
     pred_std = np.stack([std_f1, std_f2], axis=1)
-
-    if verbose:
-        tag = "noiseless" if noiseless else "with_noise"
 
     return pred_mean, pred_std, mean_f1, std_f1, mean_f2, std_f2
 
@@ -508,9 +501,6 @@ class BNNRegressor:
         hidden=16,
         lr=1e-3,
         max_steps=50000,
-        patience=10,
-        validation_interval=200,
-        validation_samples=50,
         prediction_samples=100,
         prior_scale=0.5,
         fixed_sigma=1e-3,
@@ -526,9 +516,6 @@ class BNNRegressor:
             self.hidden = int(hidden)
         self.lr = float(lr)
         self.max_steps = int(max_steps)
-        self.patience = int(patience)
-        self.validation_interval = int(validation_interval)
-        self.validation_samples = int(validation_samples)
         self.prediction_samples = int(prediction_samples)
         self.prior_scale = float(prior_scale)
         self.fixed_sigma = float(fixed_sigma)
@@ -561,15 +548,7 @@ class BNNRegressor:
             return []
         return [self.device.index if self.device.index is not None else 0]
 
-    def fit(
-        self,
-        X,
-        y,
-        X_val=None,
-        y_val=None,
-        X_refit=None,
-        y_refit=None,
-    ):
+    def fit(self, X, y):
         modules = _require_pyro()
         torch = modules["torch"]
         pyro = modules["pyro"]
@@ -581,33 +560,9 @@ class BNNRegressor:
             raise ValueError("X and y must have the same number of rows.")
         if X.shape[0] < 2:
             raise ValueError("BNNRegressor needs at least two training samples.")
-        if X_val is None or y_val is None:
-            raise ValueError("BNNRegressor.fit requires X_val and y_val for early stopping.")
-        X_val = np.asarray(X_val, dtype=np.float32)
-        y_val = np.asarray(y_val, dtype=np.float32).reshape(-1)
-        if X_val.ndim != 2:
-            raise ValueError("X_val must be a 2D array.")
-        if X_val.shape[1] != X.shape[1]:
-            raise ValueError("X and X_val must have the same number of columns.")
-        if y_val.shape[0] != X_val.shape[0]:
-            raise ValueError("X_val and y_val must have the same number of rows.")
-        if (X_refit is None) != (y_refit is None):
-            raise ValueError("X_refit and y_refit must be provided together.")
-        if X_refit is not None:
-            X_refit = np.asarray(X_refit, dtype=np.float32)
-            y_refit = np.asarray(y_refit, dtype=np.float32).reshape(-1)
-            if X_refit.ndim != 2 or X_refit.shape[1] != X.shape[1]:
-                raise ValueError(
-                    "X_refit must be 2D with the same columns as X."
-                )
-            if len(X_refit) != len(y_refit):
-                raise ValueError("X_refit and y_refit row counts must match.")
-            if len(X_refit) < 2:
-                raise ValueError("BNN refitting needs at least two samples.")
 
         self.target_scaler.fit(y.reshape(-1, 1))
         y_scaled = self.target_scaler.transform(y.reshape(-1, 1)).reshape(-1)
-        y_val_scaled = self.target_scaler.transform(y_val.reshape(-1, 1)).reshape(-1)
 
         self.device = torch.device(
             self.device_name
@@ -616,8 +571,6 @@ class BNNRegressor:
         )
         X_tensor = torch.tensor(X, dtype=torch.float32, device=self.device)
         y_tensor = torch.tensor(y_scaled, dtype=torch.float32, device=self.device)
-        X_val_tensor = torch.tensor(X_val, dtype=torch.float32, device=self.device)
-        y_val_tensor = torch.tensor(y_val_scaled, dtype=torch.float32, device=self.device)
         param_store = pyro.get_param_store()
 
         with torch.random.fork_rng(devices=self._torch_rng_devices()):
@@ -641,103 +594,14 @@ class BNNRegressor:
                     loss=modules["Trace_ELBO"](),
                 )
 
-                best_val_mse = float("inf")
-                best_state = None
-                best_step = None
-                no_improve = 0
                 for step in range(1, self.max_steps + 1):
                     loss = svi.step(X_tensor, y_tensor)
-                    if step % self.validation_interval != 0:
-                        continue
+                    if self.verbose and step % 1000 == 0:
+                        print(f"[{step}] train ELBO={loss:.2e}")
 
-                    predictive = modules["Predictive"](
-                        self.model,
-                        guide=self.guide,
-                        num_samples=self.validation_samples,
-                        return_sites=("mean",),
-                    )
-                    with torch.no_grad():
-                        val_mean = predictive(X_val_tensor)["mean"].mean(dim=0)
-                        val_mse = ((val_mean - y_val_tensor) ** 2).mean().item()
-
-                    if val_mse < best_val_mse:
-                        best_val_mse = val_mse
-                        best_state = copy.deepcopy(param_store.get_state())
-                        best_step = step
-                        no_improve = 0
-                    else:
-                        no_improve += 1
-
-                    if self.verbose:
-                        print(
-                            f"[{step}] train ELBO={loss:.2e}, "
-                            f"val MSE={val_mse:.2e}, "
-                            f"no_improve={no_improve}/{self.patience}"
-                        )
-                    if no_improve >= self.patience:
-                        if self.verbose:
-                            print(
-                                f"Early stopping at step {step}, "
-                                f"best val={best_val_mse:.2e}"
-                            )
-                        break
-
-                if best_state is not None:
-                    param_store.clear()
-                    param_store.set_state(best_state)
-
-            selected_steps = int(best_step if best_step is not None else step)
-            self.selection_training_steps = int(step)
-            self.best_validation_step = selected_steps
-
-            if X_refit is None:
-                self.param_store_state = param_store_state
-                self.training_steps = int(step)
-                self.refit_training_size = None
-            else:
-                # Early stopping selected only the step count.  Reinitialize
-                # every variational parameter and fit the delivered model on
-                # all configured N rows, using normalization from those N rows.
-                self.target_scaler.fit(y_refit.reshape(-1, 1))
-                y_refit_scaled = self.target_scaler.transform(
-                    y_refit.reshape(-1, 1)
-                ).reshape(-1)
-                X_refit_tensor = torch.tensor(
-                    X_refit,
-                    dtype=torch.float32,
-                    device=self.device,
-                )
-                y_refit_tensor = torch.tensor(
-                    y_refit_scaled,
-                    dtype=torch.float32,
-                    device=self.device,
-                )
-                torch.manual_seed(self.random_state)
-                if self.device.type == "cuda":
-                    torch.cuda.manual_seed_all(self.random_state)
-                with param_store.scope() as refit_param_store_state:
-                    self.model = _build_bayesian_network(
-                        modules,
-                        in_dim=X_refit.shape[1],
-                        hidden=self.hidden,
-                        prior_scale=self.prior_scale,
-                        fixed_sigma=self.fixed_sigma,
-                    ).to(self.device)
-                    self.guide = modules["AutoDiagonalNormal"](self.model)
-                    refit_optimizer = modules["Adam"]({"lr": self.lr})
-                    refit_svi = modules["SVI"](
-                        self.model,
-                        self.guide,
-                        refit_optimizer,
-                        loss=modules["Trace_ELBO"](),
-                    )
-                    for _ in range(selected_steps):
-                        refit_svi.step(X_refit_tensor, y_refit_tensor)
-                self.param_store_state = refit_param_store_state
-                self.training_steps = selected_steps
-                self.refit_training_size = int(len(X_refit))
-
-            self.best_val_mse = best_val_mse
+            self.param_store_state = param_store_state
+            self.training_steps = int(self.max_steps)
+            self.fit_training_size = int(len(X))
         return self
 
     def _predictive_samples(self, X, num_samples=None):
@@ -843,7 +707,7 @@ def bnn_pred_mean_quantiles(model_f1, model_f2, X_test, verbose=True):
     return mean_q, q80, q90, q95
 
 
-def _generate_calibration_data(problem, sample_size, train_seed, test_seed):
+def _generate_experiment_data(problem, sample_size, train_seed, test_seed):
     from pymoo.operators.sampling.lhs import LHS
     from src.data import generate_data
 
@@ -852,36 +716,39 @@ def _generate_calibration_data(problem, sample_size, train_seed, test_seed):
         sample_size=sample_size,
         sampling=LHS(),
         train_seed=train_seed,
-        val_size=100,
         test_size=100,
         test_seed=test_seed,
     )
 
 
-def train_gpr_models_for_calibration(
+def train_gpr_models(
     problem,
     sample_size,
     kernel="rbf",
     train_seed=42,
     test_seed=1,
 ):
-    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
-    X_train, y_train, X_val, y_val, X_test, y_test = data
+    X_train, y_train, X_test, y_test = _generate_experiment_data(
+        problem, sample_size, train_seed, test_seed
+    )
     model_class = GPR_RBF if str(kernel).lower() == "rbf" else GPR_Matern
-    models = tuple(model_class() for _ in range(y_train.shape[1]))
-    for objective_index, model in enumerate(models):
+    models = []
+    for objective_index in range(y_train.shape[1]):
+        model = model_class()
         model.fit(X_train, y_train[:, objective_index])
-    return models, X_train, y_train, X_val, y_val, X_test, y_test
+        models.append(model)
+    return tuple(models), X_train, y_train, X_test, y_test
 
 
-def train_autogluon_qr_models_for_calibration(
+def train_autogluon_qr_models(
     problem,
     sample_size,
     train_seed=42,
     test_seed=1,
 ):
-    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
-    X_train, y_train, X_val, y_val, X_test, y_test = data
+    X_train, y_train, X_test, y_test = _generate_experiment_data(
+        problem, sample_size, train_seed, test_seed
+    )
     models = tuple(
         autogluon_qr_fit_predict(
             X_train,
@@ -891,54 +758,10 @@ def train_autogluon_qr_models_for_calibration(
         )[1]
         for objective_index in range(y_train.shape[1])
     )
-    return models, X_train, y_train, X_val, y_val, X_test, y_test
+    return models, X_train, y_train, X_test, y_test
 
 
-def train_autogluon_models_for_calibration(
-    problem,
-    sample_size,
-    train_seed=42,
-    test_seed=1,
-    hyperparameters=None,
-    fit_kwargs=None,
-):
-    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
-    X_train, y_train, X_val, y_val, X_test, y_test = data
-    models = tuple(
-        autogluon_fit_predict(
-            X_train,
-            y_train[:, objective_index],
-            X_test,
-            hyperparameters=hyperparameters,
-            fit_kwargs=fit_kwargs,
-            random_state=train_seed,
-        )[1]
-        for objective_index in range(y_train.shape[1])
-    )
-    return models, X_train, y_train, X_val, y_val, X_test, y_test
-
-
-def train_tabpfn_models_for_calibration(
-    problem,
-    sample_size,
-    train_seed=42,
-    test_seed=1,
-):
-    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
-    X_train, y_train, X_val, y_val, X_test, y_test = data
-    models = tuple(
-        tabpfn_fit_predict(
-            X_train,
-            y_train[:, objective_index],
-            X_test,
-            random_state=train_seed,
-        )[1]
-        for objective_index in range(y_train.shape[1])
-    )
-    return models, X_train, y_train, X_val, y_val, X_test, y_test
-
-
-def train_bnn_models_for_calibration(
+def train_bnn_models(
     problem,
     sample_size,
     train_seed=42,
@@ -946,170 +769,22 @@ def train_bnn_models_for_calibration(
     hidden=16,
     lr=1e-3,
     max_steps=50000,
-    patience=10,
     fixed_sigma=1e-3,
+    prediction_samples=100,
 ):
-    data = _generate_calibration_data(problem, sample_size, train_seed, test_seed)
-    X_train, y_train, X_val, y_val, X_test, y_test = data
-    models = tuple(
-        BNNRegressor(
+    X_train, y_train, X_test, y_test = _generate_experiment_data(
+        problem, sample_size, train_seed, test_seed
+    )
+    models = []
+    for objective_index in range(y_train.shape[1]):
+        model = BNNRegressor(
             hidden=hidden,
             lr=lr,
             max_steps=max_steps,
-            patience=patience,
+            prediction_samples=prediction_samples,
             fixed_sigma=fixed_sigma,
             random_state=train_seed,
         )
-        for _ in range(y_train.shape[1])
-    )
-    for objective_index, model in enumerate(models):
-        model.fit(
-            X_train,
-            y_train[:, objective_index],
-            X_val,
-            y_val[:, objective_index],
-        )
-    return models, X_train, y_train, X_val, y_val, X_test, y_test
-
-
-def train_gpr_rbf_for_calibration(problem, sample_size, train_seed=42, test_seed=1):
-    X_train, y_train, X_val, y_val, X_test, y_test = _generate_calibration_data(
-        problem,
-        sample_size,
-        train_seed,
-        test_seed,
-    )
-    model_f1 = GPR_RBF()
-    model_f2 = GPR_RBF()
-    model_f1.fit(X_train, y_train[:, 0])
-    model_f2.fit(X_train, y_train[:, 1])
-    return model_f1, model_f2, X_train, y_train, X_val, y_val, X_test, y_test
-
-
-def train_gpr_matern_for_calibration(problem, sample_size, train_seed=42, test_seed=1):
-    X_train, y_train, X_val, y_val, X_test, y_test = _generate_calibration_data(
-        problem,
-        sample_size,
-        train_seed,
-        test_seed,
-    )
-    model_f1 = GPR_Matern()
-    model_f2 = GPR_Matern()
-    model_f1.fit(X_train, y_train[:, 0])
-    model_f2.fit(X_train, y_train[:, 1])
-    return model_f1, model_f2, X_train, y_train, X_val, y_val, X_test, y_test
-
-
-def train_autogluon_qr_for_calibration(problem, sample_size, train_seed=42, test_seed=1):
-    X_train, y_train, X_val, y_val, X_test, y_test = _generate_calibration_data(
-        problem,
-        sample_size,
-        train_seed,
-        test_seed,
-    )
-    _, model_f1 = autogluon_qr_fit_predict(
-        X_train,
-        y_train[:, 0],
-        X_test,
-        random_state=train_seed,
-    )
-    _, model_f2 = autogluon_qr_fit_predict(
-        X_train,
-        y_train[:, 1],
-        X_test,
-        random_state=train_seed,
-    )
-    return model_f1, model_f2, X_train, y_train, X_test, y_test
-
-
-def train_autogluon_for_calibration(
-    problem,
-    sample_size,
-    train_seed=42,
-    test_seed=1,
-    hyperparameters=None,
-    fit_kwargs=None,
-):
-    X_train, y_train, X_val, y_val, X_test, y_test = _generate_calibration_data(
-        problem,
-        sample_size,
-        train_seed,
-        test_seed,
-    )
-    _, model_f1 = autogluon_fit_predict(
-        X_train,
-        y_train[:, 0],
-        X_test,
-        hyperparameters=hyperparameters,
-        fit_kwargs=fit_kwargs,
-        random_state=train_seed,
-    )
-    _, model_f2 = autogluon_fit_predict(
-        X_train,
-        y_train[:, 1],
-        X_test,
-        hyperparameters=hyperparameters,
-        fit_kwargs=fit_kwargs,
-        random_state=train_seed,
-    )
-    return model_f1, model_f2, X_train, y_train, X_test, y_test
-
-
-def train_tabpfn_for_calibration(problem, sample_size, train_seed=42, test_seed=1):
-    X_train, y_train, X_val, y_val, X_test, y_test = _generate_calibration_data(
-        problem,
-        sample_size,
-        train_seed,
-        test_seed,
-    )
-    _, model_f1 = tabpfn_fit_predict(
-        X_train,
-        y_train[:, 0],
-        X_test,
-        random_state=train_seed,
-    )
-    _, model_f2 = tabpfn_fit_predict(
-        X_train,
-        y_train[:, 1],
-        X_test,
-        random_state=train_seed,
-    )
-    return model_f1, model_f2, X_train, y_train, X_test, y_test
-
-
-def train_bnn_for_calibration(
-    problem,
-    sample_size,
-    train_seed=42,
-    test_seed=1,
-    hidden=16,
-    lr=1e-3,
-    max_steps=50000,
-    patience=10,
-    fixed_sigma=1e-3,
-):
-    X_train, y_train, X_val, y_val, X_test, y_test = _generate_calibration_data(
-        problem,
-        sample_size,
-        train_seed,
-        test_seed,
-    )
-    model_f1 = BNNRegressor(
-        hidden=hidden,
-        lr=lr,
-        max_steps=max_steps,
-        patience=patience,
-        fixed_sigma=fixed_sigma,
-        random_state=train_seed,
-    )
-    model_f2 = BNNRegressor(
-        hidden=hidden,
-        lr=lr,
-        max_steps=max_steps,
-        patience=patience,
-        fixed_sigma=fixed_sigma,
-        random_state=train_seed,
-    )
-    model_f1.fit(X_train, y_train[:, 0], X_val, y_val[:, 0])
-    model_f2.fit(X_train, y_train[:, 1], X_val, y_val[:, 1])
-    return model_f1, model_f2, X_train, y_train, X_test, y_test
+        model.fit(X_train, y_train[:, objective_index])
+        models.append(model)
+    return tuple(models), X_train, y_train, X_test, y_test

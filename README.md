@@ -119,13 +119,27 @@ The reference paper reports HV, not IGD/IGD+, for its benchmark results because
 true Pareto fronts are unavailable for many real tasks. IGD+ here is a
 paper-compatible extension rather than a reproduced paper metric.
 
+### Uncertainty Protocol
+
+Dual Ranking uses the configured one-sided quantile (0.90 by default). GPR
+predictions use latent function variance only (`include_likelihood=False`), so
+fitted likelihood noise is not counted as epistemic uncertainty. Gaussian q80,
+q90, and q95 candidates use `mean + z_q * epistemic_std`, with weights 0.8416,
+1.2816, and 1.6449 respectively. QR and BNN retain the original Dual Ranking
+crossing rule: an upper quantile below the center is reflected as
+`center + abs(q_upper - center)`. No empirical coverage adjustment is applied.
+
+The standalone Exp1–Exp4 entry points train one surrogate per objective using
+100% of the selected offline dataset. The independent test set is used only to
+report prediction error.
+
 An independent Off-MOO-Bench training-pool small-data mode is configured in
 `experiments/config_official_pool.yaml`. It leaves the default LHS mode unchanged,
 uses nested random prefixes for sample sizes 50/100/200/400/1000, and caches
 the shared subset indices under `experiments/data_subsets/`. Here N is the selected
 offline-dataset cardinality, while the optimizer population size is separately
-fixed at 100. Models fit all N rows. BNN uses an internal 20% split only to
-select its early-stopping step, then reinitializes and refits on all N rows.
+fixed at 100. Every surrogate and baseline fits all N selected offline rows in
+both standalone and unified runs.
 Optimizer initial populations use the complete selected N rows. The default
 official-pool optimization seeds are 1..10, matching the default LHS mode and
 remaining independently controlled from offline/model seeds 1..10. When N=50
@@ -150,15 +164,17 @@ For `RE22`-`RE25`, the second objective in the offline-moo implementation is the
 
 ## Running Benchmark Experiments
 
-The benchmark notebooks are in `experiments/`. Edit `experiments/config.yaml` to change problem names, seeds, population size, generations, or sample sizes.
+The benchmark notebooks are in `experiments/`. Their standalone default uses
+`N=100` for every configured problem. Edit `experiments/config.yaml` to change
+problem names, seeds, population size, generations, or sample sizes.
 
 Main notebooks include:
 
 ```text
-Exp1_GPR_RBF_real_world_problem.ipynb
-Exp2_GPR_Matern_real_world_problem.ipynb
-Exp3_Autogluon_QR_real_world_problem.ipynb
-Exp4_BNN_real_world_problem.ipynb
+Exp1_GPR_RBF.ipynb
+Exp2_GPR_Matern.ipynb
+Exp3_Autogluon_QR.ipynb
+Exp4_BNN.ipynb
 Exp5_Prob_RVEA_2022.ipynb
 Exp6_Prob_MOEAD_2022.ipynb
 Exp7_TGPR_MO_2023.ipynb

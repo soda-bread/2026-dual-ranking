@@ -1,9 +1,18 @@
-# Auto-generated from Exp2_GPR_Matern_real_world_problem.ipynb.
-# Run with: python Exp2_GPR_Matern_real_world_problem.py
+# Auto-generated from Exp4_BNN.ipynb.
+# Run with: python Exp4_BNN.py
 
 from pathlib import Path as _ExperimentsPath
 import atexit as _experiments_atexit
+import os as _experiments_os
 import sys as _experiments_sys
+
+for _experiments_thread_env in (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+):
+    _experiments_os.environ.setdefault(_experiments_thread_env, "1")
 
 EXPERIMENTS_DIR = _ExperimentsPath(__file__).resolve().parent
 EXPERIMENTS_LOG_DIR = EXPERIMENTS_DIR / "logs"
@@ -11,7 +20,7 @@ EXPERIMENTS_RESULTS_DIR = EXPERIMENTS_DIR / "results"
 EXPERIMENTS_LOG_DIR.mkdir(parents=True, exist_ok=True)
 EXPERIMENTS_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-_EXPERIMENTS_METHOD_NAME = "GPR_Matern"
+_EXPERIMENTS_METHOD_NAME = "BNN"
 _EXPERIMENTS_LOG_PATH = EXPERIMENTS_LOG_DIR / (_EXPERIMENTS_METHOD_NAME + ".log")
 _EXPERIMENTS_LOG_FILE = open(_EXPERIMENTS_LOG_PATH, "a", encoding="utf-8", buffering=1)
 _EXPERIMENTS_STDOUT = _experiments_sys.stdout
@@ -50,12 +59,11 @@ _experiments_atexit.register(_close_experiments_log)
 print(f"[experiments] logging to: {_EXPERIMENTS_LOG_PATH}")
 print(f"[experiments] results dir: {EXPERIMENTS_RESULTS_DIR}")
 
-# # Exp2 GPR Matern real-world problem
+# # Exp4 BNN real-world problem
 #
-# Run GPR(Matern) across the configured real-world problems and print one summary block per problem.
+# Run BNN across the configured real-world problems and print one summary block per problem.
 
 # ### **Package**
-#
 
 
 # ---- notebook cell 2 ----
@@ -90,9 +98,9 @@ DEPENDENCIES = {
         'checks': ('pymoo', 'pymoo.gradient.toolbox', 'pymoo.core.problem', 'pymoo.operators.sampling.lhs'),
         'pip_args': ('--force-reinstall',),
     },
-    'GPy': {
-        'pip': 'GPy',
-        'checks': ('GPy',),
+    'pyro': {
+        'pip': 'pyro-ppl',
+        'checks': ('torch', 'pyro'),
     },
     'yaml': {
         'pip': 'pyyaml',
@@ -101,10 +109,6 @@ DEPENDENCIES = {
     'pandas': {
         'pip': 'pandas',
         'checks': ('pandas',),
-    },
-    'torch': {
-        'pip': 'torch',
-        'checks': ('torch',),
     },
     'scipy': {
         'pip': 'scipy',
@@ -181,20 +185,18 @@ from src.experiment import (
     run_experiment,
 )
 from src.metrics import get_igd_plus, get_metrics
-from src.models import GPR_Matern, gpr_pred_mean_std, train_gpr_models_for_calibration
+from src.models import BNNRegressor, bnn_pred_mean_quantiles, train_bnn_models
 from src.opt_problem import build_problem
 from src.other_functions import mean_std
 from result_recording import append_result_csv
-from src.survival import Survival_dual_ranking, Survival_standard, find_upper_alpha
+from src.survival import Survival_dual_ranking, Survival_standard
 
 warnings.filterwarnings("ignore", message=".*load_learner.*pickle.*")
 np.set_printoptions(precision=3, suppress=True)
 
 # ### **Main**
-#
 
 # ###### 1. Initial settings
-#
 
 
 # ---- notebook cell 5 ----
@@ -254,21 +256,22 @@ optimizer_run_specs = [
     {"result_name": "Dual-Ranking+NSGA-II", "optimizer_name": "NSGA-II", "use_dual_ranking": True},
 ]
 optimizer_names = [spec["result_name"] for spec in optimizer_run_specs]
-dual_ranking_target_coverage = experiment_config.get("dual_ranking_target_coverage", 0.90)
-dual_ranking_alpha_max = experiment_config.get("dual_ranking_alpha_max", 500.0)
-dual_ranking_alpha_step = experiment_config.get("dual_ranking_alpha_step", 0.01)
-method_name = "GPR_Matern"
+dual_ranking_quantile = experiment_config.get("dual_ranking_quantile", 0.90)
+method_name = "BNN"
 
 print(f"Loaded experiment config: {config_path}")
 print(f"Problems: {len(problem_names)} | seeds: range({seed_start}, {seed_end}) | n_gen: {n_gen} | pop_size: {pop_size}")
 print(f"Optimizers: {optimizer_names}")
 
 # ###### 2. Surrogate model and summary functions
-#
 
 
 # ---- notebook cell 7 ----
-use_surrogate = "GPR_uncertainty"
+use_surrogate = "BNN_uncertainty"
+bnn_hidden = (6, 3)
+bnn_lr = 5e-4
+bnn_max_steps = 50000
+bnn_fixed_sigma = 0.05
 
 
 
@@ -276,13 +279,16 @@ use_surrogate = "GPR_uncertainty"
 def reset_experiment_random_state(seed, label=None):
     seed = int(seed)
     np.random.seed(seed)
-def train_model_for_calibration(problem, sample_size, train_seed=42, test_seed=1):
-    return train_gpr_models_for_calibration(
+def train_model(problem, sample_size, train_seed=42, test_seed=1):
+    return train_bnn_models(
         problem=problem,
         sample_size=sample_size,
-        kernel="matern",
         train_seed=train_seed,
         test_seed=test_seed,
+        hidden=bnn_hidden,
+        lr=bnn_lr,
+        max_steps=bnn_max_steps,
+        fixed_sigma=bnn_fixed_sigma,
     )
 
 
@@ -343,14 +349,14 @@ def print_problem_result(problem_name, optimizer_name, results):
 
 def run_problem(problem_name, sample_size_override=None, result_problem_name=None):
     result_problem_name = result_problem_name or problem_name
-    current_use_surrogate = "GPR_uncertainty"
+    current_use_surrogate = "BNN_uncertainty"
     reset_experiment_random_state(train_seed, f"{problem_name} surrogate/data")
     problem = build_benchmark_problem(
         problem_name,
     )
     current_sample_size = int(sample_size_override) if sample_size_override is not None else get_training_sample_sizes(problem_name, problem)[0]
     print(f"[{result_problem_name}] training sample size: {current_sample_size}")
-    models, X_train, y_train, X_val, y_val, X_test, y_test = train_model_for_calibration(
+    models, X_train, y_train, X_test, y_test = train_model(
         problem=problem,
         sample_size=current_sample_size,
         train_seed=train_seed,
@@ -390,27 +396,15 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
         optimizer_name = optimizer_spec["optimizer_name"]
         if optimizer_spec["use_dual_ranking"]:
             if dual_ranking_survival is None:
-                calibrated = [
-                    find_upper_alpha(
-                        model,
-                        X_val,
-                        y_val[:, objective_index],
-                        target_coverage=dual_ranking_target_coverage,
-                        alpha_max=dual_ranking_alpha_max,
-                        alpha_step=dual_ranking_alpha_step,
+                quantile = float(dual_ranking_quantile)
+                if quantile not in {0.8, 0.9, 0.95}:
+                    raise ValueError(
+                        "dual_ranking_quantile must be one of 0.8, 0.9, 0.95."
                     )
-                    for objective_index, model in enumerate(models)
-                ]
-                alphas = [value[0] for value in calibrated]
-                coverages = [value[1] for value in calibrated]
-                print(
-                    "Dual-ranking upper bounds: "
-                    + ", ".join(
-                        f"alpha_f{i + 1}={alpha:.3f} (coverage={coverage:.3%})"
-                        for i, (alpha, coverage) in enumerate(zip(alphas, coverages))
-                    )
+                print(f"Dual-ranking raw reflected q={quantile:.3f}")
+                dual_ranking_survival = Survival_dual_ranking(
+                    alpha=quantile,
                 )
-                dual_ranking_survival = Survival_dual_ranking(alphas=alphas)
             survival_function = dual_ranking_survival
         else:
             survival_function = Survival_standard()
@@ -447,16 +441,71 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
     return problem_results
 
 # ###### 3. Batch optimization
-#
 
 
 # ---- notebook cell 10 ----
+import concurrent.futures
 import gc
+import multiprocessing as mp
+
+EXPERIMENTS_MAX_PROBLEM_WORKERS = 4
+
+
+def _sanitize_parallel_results(problem_results):
+    sanitized = {}
+    for optimizer_name, results in problem_results.items():
+        run_details = []
+        for detail in results.get("run_details", []):
+            run_details.append(
+                {
+                    "seed": detail.get("seed"),
+                    "time": detail.get("time"),
+                    "mse_test": detail.get("mse_test"),
+                    "offline_test_mse": detail.get("offline_test_mse", detail.get("mse_test")),
+                    "mse_sur_real": detail.get("mse_sur_real", detail.get("sur_real_mse")),
+                    "sur_real_mse": detail.get("mse_sur_real", detail.get("sur_real_mse")),
+                    "hv_surrogate": detail.get("hv_surrogate"),
+                    "hv_real": detail.get("hv_real"),
+                    "hv_bounds_check": detail.get("hv_bounds_check"),
+                    "solution_count": detail.get("solution_count"),
+                    "no_feasible_solution": detail.get("no_feasible_solution", False),
+                    "no_feasible_reason": detail.get("no_feasible_reason"),
+                }
+            )
+        sanitized[optimizer_name] = {
+            "hv_surrogate_list": list(results.get("hv_surrogate_list", [])),
+            "hv_real_list": list(results.get("hv_real_list", [])),
+            "hv_real_count_list": list(results.get("hv_real_count_list", [])),
+            "mse_test_list": list(results.get("mse_test_list", [])),
+            "mse_sur_real_list": list(results.get("mse_sur_real_list", results.get("sur_real_mse_list", []))),
+            "sur_real_mse_list": list(results.get("mse_sur_real_list", results.get("sur_real_mse_list", []))),
+            "run_details": run_details,
+        }
+    return sanitized
+
+
+def _run_problem_task(task):
+    try:
+        import torch
+
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
+    problem_name, configured_sample_size, result_problem_name = task
+    problem_results = run_problem(
+        problem_name,
+        sample_size_override=configured_sample_size,
+        result_problem_name=result_problem_name,
+    )
+    return result_problem_name, _sanitize_parallel_results(problem_results)
+
 
 all_results = {}
 metrics_summary_tables = []
 result_problem_names = []
 result_csv_path = EXPERIMENTS_RESULTS_DIR / "results_real_world.csv"
+problem_tasks = []
 
 for problem_index, problem_name in enumerate(problem_names, start=1):
     problem = build_benchmark_problem(
@@ -469,26 +518,43 @@ for problem_index, problem_name in enumerate(problem_names, start=1):
             if len(configured_sample_sizes) == 1
             else f"{problem_name}_n{configured_sample_size}"
         )
-        problem_results = run_problem(
-            problem_name,
-            sample_size_override=configured_sample_size,
-            result_problem_name=result_problem_name,
-        )
-        result_problem_names.append(result_problem_name)
-        one_problem_results = {result_problem_name: problem_results}
-        metrics_summary_tables.append(
-            append_result_csv(
-                method_name=method_name,
-                optimizer_names=optimizer_names,
-                problem_names=[result_problem_name],
-                all_results=one_problem_results,
-                result_csv_path=result_csv_path,
-            )
-        )
-        del one_problem_results, problem_results
-        gc.collect()
+        problem_tasks.append((problem_name, configured_sample_size, result_problem_name))
     del problem
+
+worker_count = min(EXPERIMENTS_MAX_PROBLEM_WORKERS, len(problem_tasks))
+print(f"[experiments] running {method_name} problems with {worker_count} worker processes")
+
+
+def _record_problem_result(result_problem_name, problem_results):
+    result_problem_names.append(result_problem_name)
+    one_problem_results = {result_problem_name: problem_results}
+    metrics_summary_tables.append(
+        append_result_csv(
+            method_name=method_name,
+            optimizer_names=optimizer_names,
+            problem_names=[result_problem_name],
+            all_results=one_problem_results,
+            result_csv_path=result_csv_path,
+        )
+    )
+    del one_problem_results, problem_results
     gc.collect()
+
+
+if worker_count <= 1:
+    for task in problem_tasks:
+        _record_problem_result(*_run_problem_task(task))
+else:
+    mp_context = mp.get_context("fork")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=mp_context,
+    ) as executor:
+        future_to_task = {executor.submit(_run_problem_task, task): task for task in problem_tasks}
+        for future in concurrent.futures.as_completed(future_to_task):
+            _record_problem_result(*future.result())
+
+gc.collect()
 
 problem_names = result_problem_names
 if metrics_summary_tables:

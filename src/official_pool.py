@@ -187,9 +187,8 @@ def load_official_subset(
     sample_size,
     offline_seed,
     all_sample_sizes,
-    validation_fraction=0.2,
 ):
-    """Load a nested subset, split validation internally, and keep test isolated."""
+    """Load one nested official subset and keep the official test pool isolated."""
 
     _, pools = load_official_pool(problem_name)
     directory, permutation, _ = cache_official_subset_indices(
@@ -205,15 +204,6 @@ def load_official_subset(
     if not np.array_equal(indices, permutation[:sample_size]):
         raise ValueError("Official subset is not a prefix of the cached permutation.")
 
-    validation_fraction = float(validation_fraction)
-    if not 0.0 < validation_fraction < 1.0:
-        raise ValueError("validation_fraction must be in (0, 1).")
-    validation_size = max(1, int(round(sample_size * validation_fraction)))
-    if validation_size >= sample_size:
-        raise ValueError("Validation split leaves no surrogate-fitting samples.")
-
-    fit_indices = np.asarray(indices[:-validation_size], dtype=np.int64)
-    validation_indices = np.asarray(indices[-validation_size:], dtype=np.int64)
     x_pool, y_pool = pools["X_pool"], pools["Y_pool"]
     return {
         # The selected N-row offline dataset is the model-training dataset.
@@ -222,12 +212,6 @@ def load_official_subset(
         "y_offline": y_pool[indices].copy(),
         "X_train": x_pool[indices].copy(),
         "y_train": y_pool[indices].copy(),
-        # This internal split is used only to choose BNN early-stopping steps.
-        # The final BNN is reinitialized and fitted on all N rows afterward.
-        "X_fit": x_pool[fit_indices].copy(),
-        "y_fit": y_pool[fit_indices].copy(),
-        "X_val": x_pool[validation_indices].copy(),
-        "y_val": y_pool[validation_indices].copy(),
         "X_test": pools["X_test"].copy(),
         "y_test": pools["Y_test"].copy(),
         # Fixed evaluation-only normalization bounds.  Keeping the full pool
@@ -241,14 +225,10 @@ def load_official_subset(
             "official_training_pool_non_dominated_front"
         ),
         "offline_indices": np.asarray(indices, dtype=np.int64),
-        "fit_indices": fit_indices,
-        "validation_indices": validation_indices,
         "offline_seed": np.asarray(int(offline_seed)),
         "model_seed": np.asarray(int(offline_seed)),
         "offline_sample_size": np.asarray(sample_size),
         "fit_size": np.asarray(sample_size),
-        "early_stopping_fit_size": np.asarray(len(fit_indices)),
-        "validation_size": np.asarray(validation_size),
         "test_size": np.asarray(len(pools["X_test"])),
         "dataset_source": np.asarray("official_pool"),
     }

@@ -10,6 +10,7 @@ from pymoo.core.callback import Callback
 
 from src.real_world_problems import build_real_world_problem, is_real_world_problem
 from src.problem_specs import canonical_problem_name, get_problem_spec
+from src.models import autogluon_qr_predict
 
 
 def _build_real_problem(problem_name, n_var=None, n_obj=None):
@@ -101,12 +102,7 @@ class Benchmark_Problem(Problem):
             out["G"] = self.problem.evaluate(X, return_values_of=["G"])
 
         elif self.use_surrogate == 'QR_uncertainty':
-          df_test = pd.DataFrame(X, columns=[f'x{i}' for i in range(X.shape[1])])
-          predictions = []
-          for model in self.models:
-              pred = model.predict(df_test)
-              pred.columns = [f'y_q{q}' for q in pred.columns]
-              predictions.append(pred)
+          predictions = [autogluon_qr_predict(model, X) for model in self.models]
           out["F"] = np.column_stack([pred['y_q0.5'].values for pred in predictions])
           out["F_q80"] = np.column_stack([pred['y_q0.8'].values for pred in predictions])
           out["F_q90"] = np.column_stack([pred['y_q0.9'].values for pred in predictions])

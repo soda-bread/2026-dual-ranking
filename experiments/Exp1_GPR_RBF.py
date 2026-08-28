@@ -1,5 +1,5 @@
-# Auto-generated from Exp1_GPR_RBF_real_world_problem.ipynb.
-# Run with: python Exp1_GPR_RBF_real_world_problem.py
+# Auto-generated from Exp1_GPR_RBF.ipynb.
+# Run with: python Exp1_GPR_RBF.py
 
 from pathlib import Path as _ExperimentsPath
 import atexit as _experiments_atexit
@@ -182,11 +182,12 @@ from src.experiment import (
     run_experiment,
 )
 from src.metrics import get_igd_plus, get_metrics
-from src.models import GPR_RBF, gpr_pred_mean_std, train_gpr_models_for_calibration
+from src.models import GPR_RBF, gpr_pred_mean_std, train_gpr_models
 from src.opt_problem import build_problem
 from src.other_functions import mean_std
 from result_recording import append_result_csv
-from src.survival import Survival_dual_ranking, Survival_standard, find_upper_alpha
+from src.survival import Survival_dual_ranking, Survival_standard
+from src.uncertainty import gaussian_upper_scale
 
 warnings.filterwarnings("ignore", message=".*load_learner.*pickle.*")
 np.set_printoptions(precision=3, suppress=True)
@@ -255,9 +256,7 @@ optimizer_run_specs = [
     {"result_name": "Dual-Ranking+NSGA-II", "optimizer_name": "NSGA-II", "use_dual_ranking": True},
 ]
 optimizer_names = [spec["result_name"] for spec in optimizer_run_specs]
-dual_ranking_target_coverage = experiment_config.get("dual_ranking_target_coverage", 0.90)
-dual_ranking_alpha_max = experiment_config.get("dual_ranking_alpha_max", 500.0)
-dual_ranking_alpha_step = experiment_config.get("dual_ranking_alpha_step", 0.01)
+dual_ranking_quantile = experiment_config.get("dual_ranking_quantile", 0.90)
 method_name = "GPR_RBF"
 
 print(f"Loaded experiment config: {config_path}")
@@ -279,7 +278,7 @@ def build_benchmark_problem(problem_name):
     return build_problem(problem_name=problem_name)
 
 def train_gpr_rbf(problem, sample_size, train_seed, test_seed):
-    return train_gpr_models_for_calibration(
+    return train_gpr_models(
         problem=problem,
         sample_size=sample_size,
         kernel="rbf",
@@ -348,7 +347,7 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
     )
     current_sample_size = int(sample_size_override) if sample_size_override is not None else get_training_sample_sizes(problem_name, problem)[0]
     print(f"[{result_problem_name}] training sample size: {current_sample_size}")
-    models, X_train, y_train, X_val, y_val, X_test, y_test = train_gpr_rbf(
+    models, X_train, y_train, X_test, y_test = train_gpr_rbf(
         problem=problem,
         sample_size=current_sample_size,
         train_seed=train_seed,
@@ -388,27 +387,11 @@ def run_problem(problem_name, sample_size_override=None, result_problem_name=Non
         optimizer_name = optimizer_spec["optimizer_name"]
         if optimizer_spec["use_dual_ranking"]:
             if dual_ranking_survival is None:
-                calibrated = [
-                    find_upper_alpha(
-                        model,
-                        X_val,
-                        y_val[:, objective_index],
-                        target_coverage=dual_ranking_target_coverage,
-                        alpha_max=dual_ranking_alpha_max,
-                        alpha_step=dual_ranking_alpha_step,
-                    )
-                    for objective_index, model in enumerate(models)
-                ]
-                alphas = [value[0] for value in calibrated]
-                coverages = [value[1] for value in calibrated]
-                print(
-                    "Dual-ranking upper bounds: "
-                    + ", ".join(
-                        f"alpha_f{i + 1}={alpha:.3f} (coverage={coverage:.3%})"
-                        for i, (alpha, coverage) in enumerate(zip(alphas, coverages))
-                    )
+                scale = gaussian_upper_scale(dual_ranking_quantile)
+                print(f"Dual-ranking Gaussian q={dual_ranking_quantile:.3f}: z={scale:.6f}")
+                dual_ranking_survival = Survival_dual_ranking(
+                    alphas=[scale] * len(models),
                 )
-                dual_ranking_survival = Survival_dual_ranking(alphas=alphas)
             survival_function = dual_ranking_survival
         else:
             survival_function = Survival_standard()

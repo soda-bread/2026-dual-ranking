@@ -37,40 +37,37 @@ seed_end: 11
 train_seed: 42
 test_seed: 1
 sample_sizes_by_problem:
-  zdt1: 300
-  zdt2: 300
-  zdt3: 300
-  zdt4: 300
-  zdt6: 300
-  omnitest: 300
-  vlmop1: 300
-  vlmop2: 300
-  vlmop3: 300
-  dtlz1: 300
-  dtlz2: 300
-  dtlz3: 300
-  dtlz4: 300
-  dtlz5: 300
-  dtlz6: 300
-  dtlz7: 300
-  re21: 300
-  re22: 300
-  re23: 300
-  re24: 300
-  re25: 300
-  re31: 300
-  re32: 300
-  re33: 300
-  re34: 300
-  re35: 300
-  re36: 300
-  re37: 300
-  mo-portfolio: 300
-  molecule: 300
+  zdt1: 100
+  zdt2: 100
+  zdt3: 100
+  zdt4: 100
+  zdt6: 100
+  omnitest: 100
+  vlmop1: 100
+  vlmop2: 100
+  vlmop3: 100
+  dtlz1: 100
+  dtlz2: 100
+  dtlz3: 100
+  dtlz4: 100
+  dtlz5: 100
+  dtlz6: 100
+  dtlz7: 100
+  re21: 100
+  re22: 100
+  re23: 100
+  re24: 100
+  re25: 100
+  re31: 100
+  re32: 100
+  re33: 100
+  re34: 100
+  re35: 100
+  re36: 100
+  re37: 100
+  mo-portfolio: 100
+  molecule: 100
 show_seed_output: False
-dual_ranking_target_coverage: 0.90
-dual_ranking_alpha_max: 500.0
-dual_ranking_alpha_step: 0.01
 dual_ranking_quantile: 0.90
 
 # TabPFN credentials must be provided through TABPFN_PRIMARY_API_KEY and the
@@ -88,7 +85,6 @@ sample_size_ablation:
   train_sizes: [50, 100, 200, 400, 1000]
   lhs_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   opt_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-  validation_size: 100
   test_size: 100
   n_gen: 100
   pop_size: 100

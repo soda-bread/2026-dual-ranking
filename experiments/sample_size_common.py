@@ -45,10 +45,9 @@ PROBLEMS = EXPERIMENT_PROBLEMS
 TRAIN_SIZES = (50, 100, 200, 400, 1000)
 LHS_SEEDS = tuple(range(1, 11))
 OPT_SEEDS = tuple(range(1, 11))
-VALIDATION_SIZE = 100
 TEST_SIZE = 100
-LHS_PROTOCOL_VERSION = "lhs_legacy_v1"
-OFFICIAL_PROTOCOL_VERSION = "official_pool_generation_v5_prob_tgpr_exact_n_pop100"
+LHS_PROTOCOL_VERSION = "lhs_full_offline_fixed_quantile_v5"
+OFFICIAL_PROTOCOL_VERSION = "official_pool_full_offline_fixed_quantile_v9"
 
 
 def current_protocol_version(dataset_source):
@@ -64,9 +63,9 @@ def result_protocol_version(row):
     if value:
         return value
     source = str(row.get("dataset_source") or "lhs").strip().lower()
-    # Preserve resume compatibility for unchanged legacy LHS results, while
-    # forcing unversioned official-pool results to rerun under the new protocol.
-    return LHS_PROTOCOL_VERSION if source == "lhs" else "official_pool_unversioned"
+    # Unversioned results predate the current fixed-quantile uncertainty protocol
+    # and must not be resumed under it.
+    return f"{source}_unversioned"
 
 
 def result_optimizer_settings(row):
@@ -124,11 +123,7 @@ PROBLEMS = tuple(_root_config.get("problem_names", PROBLEMS))
 TRAIN_SIZES = tuple(int(value) for value in _ablation_config.get("train_sizes", TRAIN_SIZES))
 LHS_SEEDS = tuple(int(value) for value in _ablation_config.get("lhs_seeds", LHS_SEEDS))
 OPT_SEEDS = tuple(int(value) for value in _ablation_config.get("opt_seeds", OPT_SEEDS))
-VALIDATION_SIZE = int(_ablation_config.get("validation_size", VALIDATION_SIZE))
 TEST_SIZE = int(_ablation_config.get("test_size", TEST_SIZE))
-DUAL_RANKING_TARGET_COVERAGE = float(_root_config.get("dual_ranking_target_coverage", 0.90))
-DUAL_RANKING_ALPHA_MAX = float(_root_config.get("dual_ranking_alpha_max", 500.0))
-DUAL_RANKING_ALPHA_STEP = float(_root_config.get("dual_ranking_alpha_step", 0.01))
 DUAL_RANKING_QUANTILE = float(_root_config.get("dual_ranking_quantile", 0.90))
 
 
@@ -165,8 +160,7 @@ BASELINE_FAMILIES = {"prob_rvea", "prob_moead", "tgpr_mo", "ddmoea_gan"}
 RESULT_FIELDS = (
     "problem", "method", "dataset_source", "protocol_version",
     "configured_n_gen", "configured_pop_size", "training_size",
-    "offline_sample_size", "fit_size", "early_stopping_fit_size",
-    "validation_size", "test_size", "offline_seed", "lhs_seed",
+    "offline_sample_size", "fit_size", "test_size", "offline_seed", "lhs_seed",
     "model_seed", "opt_seed", "subset_indices_hash", "run_id", "MSEpre",
     "MSEsur_real", "HVreal", "IGDplus", "IGDplus_sur",
     "surrogate_normalization_source", "objective_normalization_source",
@@ -217,17 +211,9 @@ def _rows_overlap(a: np.ndarray, b: np.ndarray) -> bool:
 
 def dataset_path(output_dir: Path, problem: str, training_size: int, lhs_seed: int) -> Path:
     safe_problem = problem.upper().replace("-", "_")
-    filename = f"{safe_problem}_train_N{training_size}_lhs{lhs_seed}.npz"
+    filename = f"{safe_problem}_train_test_N{training_size}_lhs{lhs_seed}.npz"
     output_dir = Path(output_dir)
-    path = output_dir / "npz" / filename
-    legacy_path = output_dir / filename
-    if not path.exists() and legacy_path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.replace(legacy_path, path)
-        except FileNotFoundError:
-            pass
-    return path
+    return output_dir / "npz" / filename
 
 
 def load_or_create_dataset(
@@ -238,7 +224,6 @@ def load_or_create_dataset(
     dataset_source="lhs",
     subset_cache_root=None,
     all_sample_sizes=None,
-    validation_fraction=0.2,
 ) -> dict[str, np.ndarray]:
     """Load one shared dataset without changing the legacy LHS default."""
 
@@ -254,7 +239,6 @@ def load_or_create_dataset(
             sample_size=training_size,
             offline_seed=lhs_seed,
             all_sample_sizes=all_sample_sizes or (training_size,),
-            validation_fraction=validation_fraction,
         )
     if dataset_source != "lhs":
         raise ValueError(
@@ -274,11 +258,6 @@ def load_or_create_dataset(
         arrays.setdefault("model_seed", np.asarray(lhs_seed))
         arrays.setdefault("offline_sample_size", np.asarray(training_size))
         arrays.setdefault("fit_size", np.asarray(len(arrays["X_train"])))
-        arrays.setdefault(
-            "early_stopping_fit_size",
-            np.asarray(len(arrays["X_train"])),
-        )
-        arrays.setdefault("validation_size", np.asarray(len(arrays["X_val"])))
         arrays.setdefault("test_size", np.asarray(len(arrays["X_test"])))
         arrays.setdefault("dataset_source", np.asarray("lhs"))
         return arrays
@@ -287,33 +266,23 @@ def load_or_create_dataset(
     sampler = LHS()
     set_global_seed(lhs_seed)
     x_train = sampler(problem, int(training_size), seed=int(lhs_seed)).get("X")
-    # Fixed per problem across LHS seeds and training sizes, eliminating a
-    # changing holdout as a source of sample-size effects.
-    val_seed = _stable_problem_seed(problem_name, 200_000)
     test_seed = _stable_problem_seed(problem_name, 400_000)
-    x_val = sampler(problem, VALIDATION_SIZE, seed=val_seed).get("X")
     x_test = sampler(problem, TEST_SIZE, seed=test_seed).get("X")
     x_train = np.asarray(repair_offline_moo_decisions(problem, x_train), dtype=float)
-    x_val = np.asarray(repair_offline_moo_decisions(problem, x_val), dtype=float)
     x_test = np.asarray(repair_offline_moo_decisions(problem, x_test), dtype=float)
-    if _rows_overlap(x_train, x_val) or _rows_overlap(x_train, x_test) or _rows_overlap(x_val, x_test):
-        raise RuntimeError("Generated train/validation/test datasets overlap")
+    if _rows_overlap(x_train, x_test):
+        raise RuntimeError("Generated train/test datasets overlap")
     arrays = {
         "X_train": x_train,
         "y_train": np.asarray(problem.evaluate(x_train, return_values_of=["F"]), dtype=float),
-        "X_val": x_val,
-        "y_val": np.asarray(problem.evaluate(x_val, return_values_of=["F"]), dtype=float),
         "X_test": x_test,
         "y_test": np.asarray(problem.evaluate(x_test, return_values_of=["F"]), dtype=float),
         "lhs_seed": np.asarray(lhs_seed),
-        "validation_seed": np.asarray(val_seed),
         "test_seed": np.asarray(test_seed),
         "offline_seed": np.asarray(lhs_seed),
         "model_seed": np.asarray(lhs_seed),
         "offline_sample_size": np.asarray(training_size),
         "fit_size": np.asarray(len(x_train)),
-        "early_stopping_fit_size": np.asarray(len(x_train)),
-        "validation_size": np.asarray(len(x_val)),
         "test_size": np.asarray(len(x_test)),
         "dataset_source": np.asarray("lhs"),
     }
@@ -345,21 +314,8 @@ def _predictor_models(spec: MethodSpec, data: dict[str, np.ndarray], model_seed:
         return pair, "QR_uncertainty"
     if spec.family == "bnn":
         pair = tuple(models.BNNRegressor(random_state=model_seed) for _ in range(n_obj))
-        official_pool_mode = str(
-            _dataset_scalar(data, "dataset_source", "lhs")
-        ) == "official_pool"
-        for i, model in enumerate(pair):
-            if official_pool_mode:
-                model.fit(
-                    data["X_fit"],
-                    data["y_fit"][:, i],
-                    data["X_val"],
-                    data["y_val"][:, i],
-                    X_refit=x,
-                    y_refit=y[:, i],
-                )
-            else:
-                model.fit(x, y[:, i], data["X_val"], data["y_val"][:, i])
+        for objective_index, model in enumerate(pair):
+            model.fit(x, y[:, objective_index])
         return pair, "BNN_uncertainty"
     if spec.family in {"xgboost", "ensemble"}:
         hyperparameters = {"XGB": {}} if spec.family == "xgboost" else None
@@ -393,17 +349,23 @@ def _train_predictor(lhs_seed: int, spec: MethodSpec, data):
 
 
 def _survival(spec, models_pair, data):
-    from src.survival import Survival_dual_ranking, Survival_standard, find_upper_alpha
+    from src.survival import Survival_dual_ranking, Survival_standard
+    from src.uncertainty import gaussian_upper_scale
+
     if not spec.dual_ranking:
         return Survival_standard()
-    if spec.family in {"qr", "bnn"}:
-        return Survival_dual_ranking(alpha=DUAL_RANKING_QUANTILE)
-    alphas = [find_upper_alpha(models_pair[i], data["X_val"], data["y_val"][:, i],
-                               target_coverage=DUAL_RANKING_TARGET_COVERAGE,
-                               alpha_max=DUAL_RANKING_ALPHA_MAX,
-                               alpha_step=DUAL_RANKING_ALPHA_STEP)[0]
-              for i in range(len(models_pair))]
-    return Survival_dual_ranking(alphas=alphas)
+
+    if spec.family in {"gpr_rbf", "gpr_matern"}:
+        return Survival_dual_ranking(
+            alphas=[gaussian_upper_scale(DUAL_RANKING_QUANTILE)] * len(models_pair),
+        )
+
+    quantile = float(DUAL_RANKING_QUANTILE)
+    if quantile not in {0.8, 0.9, 0.95}:
+        raise ValueError("dual_ranking_quantile must be one of 0.8, 0.9, 0.95.")
+    if spec.family not in {"qr", "bnn"}:
+        raise ValueError(f"Unsupported dual-ranking family: {spec.family}")
+    return Survival_dual_ranking(alpha=quantile)
 
 
 def optimization_initial_population(x_train, population_size, optimization_seed):
@@ -451,12 +413,8 @@ def _base_row(
     data = {} if data is None else data
     dataset_source = str(_dataset_scalar(data, "dataset_source", dataset_source))
     protocol_version = current_protocol_version(dataset_source)
-    validation_size = int(_dataset_scalar(data, "validation_size", VALIDATION_SIZE))
     test_size = int(_dataset_scalar(data, "test_size", TEST_SIZE))
     fit_size = int(_dataset_scalar(data, "fit_size", training_size))
-    early_stopping_fit_size = int(
-        _dataset_scalar(data, "early_stopping_fit_size", fit_size)
-    )
     offline_sample_size = int(
         _dataset_scalar(data, "offline_sample_size", training_size)
     )
@@ -468,8 +426,7 @@ def _base_row(
         "training_size": int(training_size),
         "offline_sample_size": offline_sample_size,
         "fit_size": fit_size,
-        "early_stopping_fit_size": early_stopping_fit_size,
-        "validation_size": validation_size, "test_size": test_size,
+        "test_size": test_size,
         "offline_seed": int(lhs_seed), "lhs_seed": int(lhs_seed),
         "model_seed": int(model_seed),
         "opt_seed": int(opt_seed),
@@ -516,7 +473,6 @@ def _run_predictor_group(
     dataset_source="lhs",
     subset_cache_root=None,
     all_sample_sizes=None,
-    validation_fraction=0.2,
 ):
     from src.experiment import compute_surrogate_test_mse, run_experiment
     from src.metrics import get_igd_plus, get_metrics
@@ -530,7 +486,6 @@ def _run_predictor_group(
         dataset_source=dataset_source,
         subset_cache_root=subset_cache_root,
         all_sample_sizes=all_sample_sizes,
-        validation_fraction=validation_fraction,
     )
     problem = build_problem(problem_name=problem_name)
     pair, use_surrogate, training_time, model_seed = _train_predictor(
@@ -653,7 +608,6 @@ def _run_baseline_group(
     dataset_source="lhs",
     subset_cache_root=None,
     all_sample_sizes=None,
-    validation_fraction=0.2,
 ):
     # Reuse the exact uploaded baseline runners, replacing only their data hooks
     # so every method sees the shared paired dataset.
@@ -672,7 +626,6 @@ def _run_baseline_group(
         dataset_source=dataset_source,
         subset_cache_root=subset_cache_root,
         all_sample_sizes=all_sample_sizes,
-        validation_fraction=validation_fraction,
     )
     problem = build_problem(problem_name=problem_name)
     _, metric_obj_min, metric_obj_max, metric_ref_point = get_metrics(
@@ -835,7 +788,6 @@ def run_group(
     dataset_source="lhs",
     subset_cache_root=None,
     all_sample_sizes=None,
-    validation_fraction=0.2,
 ):
     """Run one cache group and stop immediately on the first error."""
     output_dir = Path(output_dir)
@@ -855,7 +807,6 @@ def run_group(
                 dataset_source=dataset_source,
                 subset_cache_root=subset_cache_root,
                 all_sample_sizes=all_sample_sizes,
-                validation_fraction=validation_fraction,
             )
             return rows, ()
         return _run_predictor_group(
@@ -870,7 +821,6 @@ def run_group(
             dataset_source=dataset_source,
             subset_cache_root=subset_cache_root,
             all_sample_sizes=all_sample_sizes,
-            validation_fraction=validation_fraction,
         )
     except Exception as error:
         message = f"{type(error).__name__}: {error}\n{traceback.format_exc()}"
