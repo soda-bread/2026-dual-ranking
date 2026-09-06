@@ -1,0 +1,52 @@
+{
+  "status": "retained experimental candidate; not independently validated",
+  "method": "OOF coverage-bias + Margin-U",
+  "base_commit": "f0c67367f9c473815861b0cbc1b7a11df47b496b",
+  "design": {
+    "problems": ["WFG1", "WFG2", "WFG4", "WFG9"],
+    "objectives": 3,
+    "variables": 6,
+    "training_sizes": [100, 400],
+    "training_seeds": 3,
+    "kernels": ["Matern52", "RBF"],
+    "candidate_points_per_problem": 10000,
+    "evaluated_pairs_per_problem": 200000,
+    "optimizer_run": false
+  },
+  "n400_problem_mean_deltas": {
+    "Matern52": {
+      "vs_centre": {"macro_f1": 0.018819, "dominance_f1": 0.025759, "problem_wins": "4/4"},
+      "vs_margin_only_same_K": {"macro_f1": 0.014357, "dominance_f1": 0.019147, "problem_wins": "4/4"},
+      "vs_permuted_uncertainty_same_K": {"macro_f1": 0.001924, "dominance_f1": 0.002579, "problem_wins": "4/4"},
+      "vs_U_ranking_centre_K": {"macro_f1": 0.006518, "dominance_f1": 0.009077, "case_wins_ties_losses": "9/0/3", "problem_wins_ties_losses": "3/0/1"},
+      "vs_constant_candidate_uncertainty": {"macro_f1": 0.000601, "case_wins_ties_losses": "6/0/6", "problem_wins_ties_losses": "2/0/2"}
+    },
+    "RBF": {
+      "vs_centre": {"macro_f1": 0.032621, "dominance_f1": 0.046576, "problem_wins": "4/4"},
+      "vs_margin_only_same_K": {"macro_f1": 0.016801, "dominance_f1": 0.022524, "problem_wins": "4/4"},
+      "vs_permuted_uncertainty_same_K": {"macro_f1": 0.002391, "dominance_f1": 0.003283, "problem_wins": "4/4"},
+      "vs_U_ranking_centre_K": {"macro_f1": 0.018371, "dominance_f1": 0.027255, "case_wins_ties_losses": "10/0/2", "problem_wins_ties_losses": "3/0/1"},
+      "vs_constant_candidate_uncertainty": {"macro_f1": 0.000531, "case_wins_ties_losses": "8/0/4", "problem_wins_ties_losses": "3/0/1"}
+    }
+  },
+  "validity_limits_n400": {
+    "cases": 24,
+    "coverage_correction_sign_matches_pool_truth": 24,
+    "coverage_absolute_error_improved": 21,
+    "macro_f1_improved_vs_centre": 24,
+    "dominance_f1_improved_vs_centre": 21,
+    "accuracy_improved_vs_centre": 17,
+    "dominance_precision_decreased_vs_centre": 18,
+    "mean_false_dominance_calls_added_per_200000_pairs": 1719,
+    "cases_with_observed_transitivity_violation": 12,
+    "observed_directed_two_step_paths": 6227,
+    "violating_paths": 106
+  },
+  "audit": {
+    "archived_tasks": 48,
+    "archived_metric_rows_recomputed": 528,
+    "maximum_metric_recompute_difference": 2.220446049250313e-16,
+    "gp_fits_converged": 864,
+    "exported_API_exactly_reproduced_archived_relations": true
+  }
+}

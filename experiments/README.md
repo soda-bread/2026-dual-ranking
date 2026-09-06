@@ -4,6 +4,12 @@ This directory is the single home for experiment configurations, notebooks,
 executable per-method scripts, baselines, the complete sample-size runner, and
 result summaries.
 
+The `chatgpt` branch also contains an [experimental OOF coverage-bias +
+Margin-U relation correction](wfg_sample_size/README.md). It passed a frozen
+WFG relation-F1 pilot but is not optimizer-ready; its validity report documents
+small candidate-specific uncertainty gains, reduced precision, and observed
+transitivity violations.
+
 The vendored baseline tree tracks only the Python packages required by
 Prob-RVEA, Prob-MOEA/D, and TGPR-MO. Upstream plots, generated results, sample
 archives, documentation builds, and caches remain excluded from Git.
