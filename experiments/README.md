@@ -44,6 +44,12 @@ The configured paper suite is ZDT1/2/3/4/6, OmniTest, VLMOP1-3, DTLZ1-7,
 RE21-25, RE31-37, MO-Portfolio, and Molecule. Both two- and three-objective
 problems are supported.
 
+## Generative baselines
+
+DOMOO, PCD, and ParetoFlow are available in `experiments/generative_baseline`.
+They reuse the same official-pool subsets and final HV/IGD+ evaluation protocol;
+see that directory's README for the comparison with the ICLR source tree and
+the run commands.
 
 ## Training-size sensitivity experiment
 

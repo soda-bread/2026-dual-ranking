@@ -1,0 +1,111 @@
+# Generative baselines under dual-ranking's paired official-pool protocol.
+methods: [DOMOO, PCD, ParetoFlow]
+
+problems:
+  - zdt1
+  - zdt2
+  - zdt3
+  - zdt4
+  - zdt6
+  - omnitest
+  - vlmop1
+  - vlmop2
+  - vlmop3
+  - dtlz1
+  - dtlz2
+  - dtlz3
+  - dtlz4
+  - dtlz5
+  - dtlz6
+  - dtlz7
+  - re21
+  - re22
+  - re23
+  - re24
+  - re25
+  - re31
+  - re32
+  - re33
+  - re34
+  - re35
+  - re36
+  - re37
+  - mo-portfolio
+  - molecule
+
+dataset_source: official_pool
+training_sizes: [50, 100, 200, 400, 1000]
+offline_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+optimization_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+output_size: 100
+
+# Shared MultipleModels-Vallina proxy. DOMOO and ParetoFlow reuse the
+# implementation in experiments/DL_baseline rather than copying it.
+proxy:
+  hidden_sizes: [2048, 2048]
+  epochs: 200
+  batch_size: 128
+  learning_rate: 0.001
+
+domoo:
+  energy_hidden_sizes: [512, 512]
+  energy_learning_rate: 0.001
+  energy_epochs: 50
+  batch_size: 256
+  langevin_step_size: 0.02
+  langevin_steps: 64
+  boundary_langevin_steps: 42
+  pareto_width: 256
+  pareto_learning_rate: 0.001
+  pretrain_epochs: 200
+  training_steps: 300
+  exploration_steps: 200
+  preference_batch_size: 256
+  preference_steps: 1
+  preference_learning_rate: 0.0001
+  risk_ratio: 0.001
+  candidate_count: 1000
+  surrogate_generations: 100
+  surrogate_population: 100
+
+pcd:
+  width: 256
+  depth: 2
+  time_dim: 128
+  diffusion_steps: 1024
+  train_steps: 1000
+  batch_size: 256
+  learning_rate: 0.0003
+  weight_decay: 0.0
+  cond_drop_prob: 0.15
+  guidance_scale: 2.5
+  sigma_min: 0.002
+  sigma_max: 80.0
+  sigma_data: 1.0
+  rho: 7.0
+  p_mean: -1.2
+  p_std: 1.2
+  s_churn: 80.0
+  s_tmin: 0.05
+  s_tmax: 50.0
+  s_noise: 1.003
+  bins: 30
+  density_k: 10.0
+  tau: 0.05
+  alpha_range: [0.1, 0.4]
+  condition_noise: 0.05
+
+paretoflow:
+  hidden_size: 512
+  sigma: 0.0
+  probability_path: icfm
+  learning_rate: 0.001
+  epochs: 1000
+  batch_size: 128
+  sampling_steps: 1000
+  guidance_scale: 2.0
+  guidance_threshold: 0.8
+  oversample_factor: 5
+
+output_dir: results
+subset_cache_dir: ../data_subsets
