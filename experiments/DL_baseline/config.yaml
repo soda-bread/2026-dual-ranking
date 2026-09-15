@@ -43,8 +43,10 @@ offline_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 optimization_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 optimizer:
-  n_gen: 100
-  pop_size: 100
+  # Upstream Off-MOO defaults. When N < pop_size, the adapter keeps all
+  # NDS-ordered offline rows and fills the shortage with bounded LHS samples.
+  n_gen: 50
+  pop_size: 256
 
 neural:
   hidden_sizes: [2048, 2048]
@@ -63,9 +65,10 @@ com:
   noise_std: 0.0
 
 mobo:
-  # null keeps the shared protocol invariant that every method fits all N rows.
-  # Set this to 256 to reproduce the upstream Off-MOO cap.
-  train_gp_data_size: null
+  # Upstream cap; automatically becomes min(256, N) for small datasets.
+  train_gp_data_size: 256
+  # Small-data safeguard for upstream's 1.1*nadir reference point.
+  ensure_dominated_reference: true
   mc_samples: 128
   raw_samples: 256
   num_restarts: 10

@@ -16,28 +16,33 @@ recorded by this repository.
 
 ## Protocol
 
-The implementation keeps the upstream model architecture and default
-hyperparameters, while using this repository's common official-pool protocol:
+The implementation follows the upstream model, loss, optimizer, initialization,
+and default search budget, while adapting data handling to this repository's
+small official-pool subsets:
 
 - nested random-prefix subsets for `N=50/100/200/400/1000`;
-- all selected `N` rows are used for model fitting (the official test pool is
-  evaluation-only);
+- all selected `N` rows are used for model fitting instead of reserving 10% for
+  checkpoint selection (the official test pool is evaluation-only);
 - offline/model seeds and optimization seeds are independent;
-- neural methods use NSGA-II initialized from the selected offline subset;
+- neural methods use upstream NDS-ordered NSGA-II initialization; when
+  `N < pop_size`, bounded LHS samples fill the shortage;
 - final candidates are evaluated by the true problem only after optimization;
 - HV and IGD+ use the fixed full-training-pool normalization/reference data,
   matching `experiments/config_official_pool.yaml`.
 
 The upstream defaults are 2048-2048 LeakyReLU MLPs, 200 epochs, batch size 128,
-and a 100-generation/100-population NSGA-II run. MOBO keeps the upstream
-qNEHVI acquisition defaults (128 MC samples, 256 raw samples, and 10 restarts),
-but fits all N rows by default for consistency with the shared protocol. Set
-`mobo.train_gp_data_size: 256` to reproduce the upstream GP-data cap. These are
-expensive settings; use the smoke-test overrides first.
+and a 50-generation/256-population NSGA-II run. MOBO keeps the upstream
+non-dominated-first 256-row GP cap, `[0, 1]` bound normalization, one qNEHVI
+proposal batch, 128 MC samples, 256 raw samples, and 10 restarts. For small
+datasets, the GP cap becomes `min(256, N)`. The acquisition starts from the
+upstream `1.1 * nadir` reference; `ensure_dominated_reference: true` moves only
+invalid coordinates below the observed maximization values so qNEHVI remains
+defined on small subsets.
 
-The shared protocol deliberately disables upstream COM data pruning so every
-method receives the same selected `N` rows. COM's conservative loss, particle
-updates, and dual-alpha update remain unchanged.
+The small-data adaptation deliberately disables upstream COM's additional 20%
+Pareto pruning so every method receives all selected `N` rows. COM keeps the
+same conservative loss, particle updates, and dual-alpha update; only the
+pruning-associated `1 / 0.2` global loss multiplier is omitted with pruning.
 
 ## Installation
 

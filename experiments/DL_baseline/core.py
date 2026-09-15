@@ -29,7 +29,7 @@ BASELINE_NAMES = (
     "MultipleModels-COM",
     "MOBO-Vallina",
 )
-PROTOCOL_VERSION = "off_moo_dl_baselines_official_pool_v1"
+PROTOCOL_VERSION = "off_moo_dl_baselines_official_pool_v2"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OFFLINE_MOO_ROOT = REPO_ROOT / "external" / "offline-moo"
 
@@ -94,6 +94,31 @@ class Standardizer:
         return np.asarray(values, dtype=float) * self.scale + self.mean
 
 
+@dataclass(frozen=True)
+class BoundsScaler:
+    """Upstream MOBO's affine normalization from problem bounds to [0, 1]."""
+
+    lower: np.ndarray
+    span: np.ndarray
+
+    @classmethod
+    def fit(cls, lower: np.ndarray, upper: np.ndarray) -> "BoundsScaler":
+        lower = np.asarray(lower, dtype=float).reshape(-1)
+        upper = np.asarray(upper, dtype=float).reshape(-1)
+        if lower.shape != upper.shape or not np.all(np.isfinite([lower, upper])):
+            raise ValueError("MOBO requires matching finite decision bounds.")
+        span = upper - lower
+        if np.any(span <= 0.0):
+            raise ValueError("MOBO requires strictly increasing decision bounds.")
+        return cls(lower=lower, span=span)
+
+    def transform(self, values: np.ndarray) -> np.ndarray:
+        return (np.asarray(values, dtype=float) - self.lower) / self.span
+
+    def inverse(self, values: np.ndarray) -> np.ndarray:
+        return np.asarray(values, dtype=float) * self.span + self.lower
+
+
 @dataclass
 class Predictor:
     models: Sequence[Any]
@@ -118,7 +143,7 @@ class Predictor:
 @dataclass
 class MoboPredictor:
     model: Any
-    x_scaler: Standardizer
+    x_scaler: BoundsScaler
     y_scaler: Standardizer
     device: Any
     dtype: Any
@@ -422,11 +447,50 @@ def _nondominated_training_indices(y: np.ndarray, limit: int) -> np.ndarray:
     return ordered[:limit]
 
 
+def upstream_nds_initial_population(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    population_size: int,
+    opt_seed: int,
+    problem,
+) -> np.ndarray:
+    """Reproduce Off-MOO's NDS initialization with a small-data LHS fill.
+
+    Upstream takes offline designs in Pareto-front order and fills a population
+    shortage with Latin-hypercube samples.  Its search space is normalized to
+    [0, 1]; this adapter samples directly from the equivalent raw task bounds.
+    """
+
+    from pymoo.operators.sampling.lhs import LHS
+
+    from src.offline_moo_adapter import repair_offline_moo_decisions
+
+    x_train = _matrix(x_train, "x_train")
+    y_train = _matrix(y_train, "y_train")
+    if len(x_train) != len(y_train):
+        raise ValueError("x_train and y_train must contain the same number of rows.")
+    population_size = int(population_size)
+    if population_size < 2:
+        raise ValueError("population_size must be at least 2.")
+
+    ordered = _nondominated_training_indices(y_train, len(y_train))
+    initial = x_train[ordered[:population_size]].copy()
+    shortage = population_size - len(initial)
+    if shortage > 0:
+        lhs = LHS().do(problem, shortage, seed=int(opt_seed)).get("X")
+        initial = np.vstack((initial, np.asarray(lhs, dtype=float)))
+    return np.asarray(
+        repair_offline_moo_decisions(problem, initial), dtype=float
+    )
+
+
 def fit_mobo_predictor(
     data: dict[str, np.ndarray],
     mobo_config: dict[str, Any],
     model_seed: int,
     device,
+    x_lower: np.ndarray,
+    x_upper: np.ndarray,
 ) -> MoboPredictor:
     import torch
     from botorch import fit_gpytorch_mll
@@ -442,7 +506,10 @@ def fit_mobo_predictor(
         if gp_limit is None
         else _nondominated_training_indices(y_train, int(gp_limit))
     )
-    x_scaler = Standardizer.fit(x_train)
+    # MOBOContinuous normalizes designs using the problem bounds rather than
+    # empirical moments.  Keep that behavior; fit objective normalization only
+    # on the selected small-data subset to avoid full-pool leakage.
+    x_scaler = BoundsScaler.fit(x_lower, x_upper)
     y_scaler = Standardizer.fit(y_train)
     dtype = torch.double
     train_x = torch.as_tensor(
@@ -480,7 +547,6 @@ def optimize_neural(
     from pymoo.core.repair import Repair
     from pymoo.optimize import minimize
 
-    from experiments.sample_size_common import optimization_initial_population
     from src.offline_moo_adapter import repair_offline_moo_decisions
 
     true_problem = task.problem
@@ -502,14 +568,14 @@ def optimize_neural(
             repaired = repair_offline_moo_decisions(true_problem, x)
             out["F"] = predictor.predict(repaired)
 
-    initial = optimization_initial_population(x_train, pop_size, opt_seed)
-    initial = repair_offline_moo_decisions(true_problem, initial)
-    repeated = len(np.unique(initial, axis=0)) < int(pop_size)
+    initial = upstream_nds_initial_population(
+        x_train, y_train, pop_size, opt_seed, true_problem
+    )
     algorithm = NSGA2(
         pop_size=int(pop_size),
         sampling=initial,
         repair=OfflineRepair(),
-        eliminate_duplicates=not repeated,
+        eliminate_duplicates=True,
     )
     result = minimize(
         SurrogateProblem(),
@@ -529,8 +595,6 @@ def optimize_neural(
 def optimize_mobo(
     predictor: MoboPredictor,
     task,
-    x_train: np.ndarray,
-    y_train: np.ndarray,
     raw_reference_point: np.ndarray,
     pop_size: int,
     opt_seed: int,
@@ -556,12 +620,16 @@ def optimize_mobo(
     requested_ref = -predictor.y_scaler.transform(
         np.asarray(raw_reference_point, dtype=float).reshape(1, -1)
     )[0]
-    # qNEHVI requires a maximization reference point dominated by observations.
-    safe_ref = np.minimum(
-        requested_ref,
-        train_y.detach().cpu().numpy().min(axis=0) - 1e-6,
-    )
-    ref_point = torch.as_tensor(safe_ref, dtype=dtype, device=device)
+    # The upstream 1.1*nadir reference can cease to be dominated after fitting
+    # a very small subset (and is especially fragile for negative objectives).
+    # Preserve it whenever valid, with an explicitly configured small-data
+    # fallback that moves only invalid coordinates below the observations.
+    if bool(config.get("ensure_dominated_reference", True)):
+        requested_ref = np.minimum(
+            requested_ref,
+            train_y.detach().cpu().numpy().min(axis=0) - 1e-6,
+        )
+    ref_point = torch.as_tensor(requested_ref, dtype=dtype, device=device)
 
     sampler = SobolQMCNormalSampler(
         sample_shape=torch.Size([int(config["mc_samples"])])
@@ -571,27 +639,24 @@ def optimize_mobo(
         "ref_point": ref_point.tolist(),
         "X_baseline": train_x,
         "sampler": sampler,
-        "prune_baseline": True,
+        "prune_baseline": False,
     }
     # Some older Off-MOO/BoTorch combinations accepted an explicit partitioning.
     if "partitioning" in inspect.signature(
         qNoisyExpectedHypervolumeImprovement.__init__
     ).parameters:
+        with torch.no_grad():
+            posterior_mean = predictor.model.posterior(train_x).mean
         acquisition_kwargs["partitioning"] = FastNondominatedPartitioning(
-            ref_point=ref_point, Y=train_y
+            ref_point=torch.zeros_like(ref_point), Y=posterior_mean
         )
     acquisition = qNoisyExpectedHypervolumeImprovement(**acquisition_kwargs)
 
-    observed_min = np.minimum(
-        np.min(predictor.x_scaler.transform(x_train), axis=0),
-        predictor.x_scaler.transform(np.asarray(task.problem.xl).reshape(1, -1))[0],
-    )
-    observed_max = np.maximum(
-        np.max(predictor.x_scaler.transform(x_train), axis=0),
-        predictor.x_scaler.transform(np.asarray(task.problem.xu).reshape(1, -1))[0],
-    )
-    bounds = torch.as_tensor(
-        np.stack((observed_min, observed_max)), dtype=dtype, device=device
+    bounds = torch.stack(
+        (
+            torch.zeros(train_x.shape[1], dtype=dtype, device=device),
+            torch.ones(train_x.shape[1], dtype=dtype, device=device),
+        )
     )
     candidates, _ = optimize_acqf(
         acq_function=acquisition,
@@ -777,8 +842,6 @@ def run_group(
     completed: set[tuple[Any, ...]],
 ) -> list[dict[str, Any]]:
     ensure_import_paths()
-    from src.problem_specs import get_paper_reference_point
-
     task, data = load_data(
         problem,
         training_size,
@@ -817,7 +880,14 @@ def run_group(
     training_started = time.perf_counter()
     try:
         if method == "MOBO-Vallina":
-            predictor = fit_mobo_predictor(data, mobo_config, offline_seed, device)
+            predictor = fit_mobo_predictor(
+                data,
+                mobo_config,
+                offline_seed,
+                device,
+                task.problem.xl,
+                task.problem.xu,
+            )
         else:
             predictor = fit_neural_predictor(
                 method,
@@ -872,9 +942,7 @@ def run_group(
                 candidates, evaluation_count = optimize_mobo(
                     predictor,
                     task,
-                    data["X_train"],
-                    data["y_train"],
-                    get_paper_reference_point(problem),
+                    1.1 * np.asarray(task.nadir_point, dtype=float),
                     pop_size,
                     opt_seed,
                     mobo_config,
