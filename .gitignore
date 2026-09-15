@@ -17,6 +17,8 @@ experiments/baseline/*
 !experiments/baseline/__init__.py
 !experiments/baseline/batch_experiments.py
 !experiments/baseline/ddmoea_gan.py
+!experiments/baseline/diagnose_ddmoea_gan.py
+!experiments/baseline/test_ddmoea_gan.py
 !experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/
 experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/*
 !experiments/baseline/Prob-RVEA and Prob-MOEA-D 2022/LICENSE

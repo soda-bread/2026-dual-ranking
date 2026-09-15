@@ -409,6 +409,7 @@ def _base_row(
     dataset_source="lhs",
     n_gen=100,
     pop_size=100,
+    method_configuration_hash="",
 ):
     data = {} if data is None else data
     dataset_source = str(_dataset_scalar(data, "dataset_source", dataset_source))
@@ -418,6 +419,9 @@ def _base_row(
     offline_sample_size = int(
         _dataset_scalar(data, "offline_sample_size", training_size)
     )
+    method_configuration_hash = str(method_configuration_hash or "")
+    if method_configuration_hash:
+        protocol_version = f"{protocol_version}+cfg-{method_configuration_hash[:12]}"
     return {
         "problem": problem, "method": method, "dataset_source": dataset_source,
         "protocol_version": protocol_version,
@@ -660,6 +664,13 @@ def _run_baseline_group(
         "metric_reference_values": data.get("metric_reference_values"),
         "igd_reference_values": data.get("igd_reference_values"),
     }
+    method_configuration_hash = ""
+    if spec.family == "ddmoea_gan":
+        method_configuration = dict(_root_config.get("ddmoea_gan") or {})
+        config["ddmoea_gan"] = method_configuration
+        method_configuration_hash = hashlib.sha256(
+            json.dumps(method_configuration, sort_keys=True).encode("utf-8")
+        ).hexdigest()
     runner = {
         "prob_rvea": batch._run_prob_rvea_problem,
         "prob_moead": batch._run_prob_moead_problem,
@@ -714,6 +725,7 @@ def _run_baseline_group(
             dataset_source=dataset_source,
             n_gen=n_gen,
             pop_size=pop_size,
+            method_configuration_hash=method_configuration_hash,
         )
         counter_values = {
             "optimizer_generation_count": detail.get(

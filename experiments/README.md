@@ -191,7 +191,30 @@ dataset using `model_seed = offline_seed`. Its optimizer still uses the
 critic-adjusted fitness internally, but final MSE/HV/IGD+ are evaluated from
 the surrogate ensemble predictions at the final candidates, not from that
 internal selection score. Two- and three-objective tasks use the corresponding
-dynamic generator/discriminator dimensions.
+dynamic generator/discriminator dimensions. The GAN follows the paper's
+one-hidden-layer architecture and uses a `D`-dimensional noise vector. The
+`ddmoea_gan` section of `config.yaml` exposes the small-data adaptations:
+
+- `poly_ridge: false` restores the paper's second-order ordinary least squares;
+- `rbf_width: paper` restores `sigma=1`, while `mean_distance` estimates the
+  width from the fitted centers;
+- `rbf_center_cap: none` restores `D` centers, while `half_train` caps them at
+  half of the current RBFN training set;
+- `accumulate_synthetic: false` uses the bagging interpretation of Algorithm 1;
+  `true` reproduces its literal cumulative `Ds` update;
+- `score_norm: sigmoid` restores the previous mapping, while `data_minmax`
+  scales scores by the real offline data's 5th and 95th percentiles.
+
+Run the appendix diagnostic with the paper's full epoch counts:
+
+```bash
+python experiments/baseline/diagnose_ddmoea_gan.py
+```
+
+For a fast pipeline check, add `--gan-epochs 2 --neural-epochs 2`. The CSV
+reports paper-literal versus small-data RBF activation, polynomial prediction
+ranges, critic separation, and `MSEpre`, together with the
+MultipleModels-Vallina `MSEpre` reference.
 
 HV and IGD+ normalization in official-pool mode uses fixed evaluation-only
 bounds from the complete official training pool, making values comparable

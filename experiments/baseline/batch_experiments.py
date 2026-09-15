@@ -1430,6 +1430,7 @@ def _run_ddmoea_gan_problem(problem_name, benchmark_problem, config, seeds):
     from ddmoea_gan import (
         DDMOEAGANProblem,
         construct_surrogate_pool_with_gan,
+        fit_discriminator_score_reference,
         surrogate_predict_with_ensemble,
         train_wgan_gp,
     )
@@ -1454,6 +1455,7 @@ def _run_ddmoea_gan_problem(problem_name, benchmark_problem, config, seeds):
     x_normalized = 2.0 * (x_init - x_min) / (x_max - x_min + 1e-12) - 1.0
     f_normalized = 2.0 * (f_init - f_min) / (f_max - f_min + 1e-12) - 1.0
     joint_init = np.hstack([x_normalized, f_normalized])
+    method_config = dict(config.get("ddmoea_gan") or {})
 
     # Train the stochastic surrogate exactly once per offline dataset.  Its
     # randomness is tied to model_seed (offline_seed by default), never to an
@@ -1466,11 +1468,17 @@ def _run_ddmoea_gan_problem(problem_name, benchmark_problem, config, seeds):
         n_obj=benchmark_problem.n_obj,
         n_epochs=2000,
         batch_size=64,
-        z_dim=32,
+        gan_hidden_layers=int(method_config.get("gan_hidden_layers", 1)),
         lambda_gp=10.0,
         n_critic=5,
         lr=1e-4,
         verbose=False,
+    )
+    score_norm = str(method_config.get("score_norm", "data_minmax"))
+    score_reference = (
+        fit_discriminator_score_reference(discriminator, joint_init, device)
+        if score_norm == "data_minmax"
+        else None
     )
     surrogate_pools, norm_bounds = construct_surrogate_pool_with_gan(
         X_init=x_init,
@@ -1481,8 +1489,13 @@ def _run_ddmoea_gan_problem(problem_name, benchmark_problem, config, seeds):
         n_models=benchmark_problem.n_var,
         select_ratio=0.2,
         poly_degree=2,
-        gamma_rbfn=0.5,
+        poly_ridge=bool(method_config.get("poly_ridge", False)),
+        rbf_width=str(method_config.get("rbf_width", "paper")),
+        rbf_center_cap=str(method_config.get("rbf_center_cap", "none")),
         lambda_rbfn=1e-6,
+        accumulate_synthetic=bool(
+            method_config.get("accumulate_synthetic", False)
+        ),
         verbose=False,
     )
     x_min, x_max, f_min, f_max = norm_bounds
@@ -1499,6 +1512,8 @@ def _run_ddmoea_gan_problem(problem_name, benchmark_problem, config, seeds):
         f_min=f_min,
         f_max=f_max,
         alpha_critic=0.1,
+        score_norm=score_norm,
+        score_reference=score_reference,
     )
     offline_test_mse = _compute_offline_test_mse(
         benchmark_problem,

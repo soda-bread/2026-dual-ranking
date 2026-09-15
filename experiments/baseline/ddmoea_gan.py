@@ -1,4 +1,4 @@
-"""DDMOEA-GAN method implementation copied from the uploaded baseline notebook."""
+"""Paper-aligned DDMOEA/GAN with independently switchable small-data fixes."""
 
 from __future__ import annotations
 
@@ -10,28 +10,67 @@ from pymoo.core.problem import Problem
 from scipy.spatial.distance import cdist
 from scipy.special import expit
 from sklearn.cluster import KMeans
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, RidgeCV
 from sklearn.preprocessing import PolynomialFeatures
 
 
 class RBFN:
-    def __init__(self, n_centers=None, gamma=0.5, lambda_reg=1e-6, random_state=0):
+    def __init__(
+        self,
+        n_centers=None,
+        width="paper",
+        center_cap="none",
+        lambda_reg=1e-6,
+        random_state=0,
+    ):
         self.n_centers = n_centers
-        self.gamma = gamma
+        self.width = str(width)
+        self.center_cap = str(center_cap)
         self.lambda_reg = lambda_reg
         self.random_state = random_state
         self.centers = None
         self.weights = None
+        self.gamma_ = None
+        self.sigma_ = None
+        self.activation_mean_ = None
+        self.n_centers_ = None
+        self.n_samples_fit_ = None
 
     def _rbf(self, r):
-        return np.exp(-self.gamma * r * r)
+        if self.gamma_ is None:
+            raise RuntimeError("RBFN must be fitted before evaluating activations.")
+        return np.exp(-self.gamma_ * r * r)
+
+    def _resolve_n_centers(self, n_samples, n_var):
+        n_centers = n_var if self.n_centers is None else int(self.n_centers)
+        if self.center_cap in {"none", "paper"}:
+            pass
+        elif self.center_cap == "half_train":
+            n_centers = min(n_centers, max(2, n_samples // 2))
+        else:
+            raise ValueError(
+                "center_cap must be one of {'none', 'paper', 'half_train'}."
+            )
+        return max(1, min(n_samples, n_centers))
+
+    def _set_width_from_centers(self):
+        if self.width == "paper":
+            self.sigma_ = 1.0
+        elif self.width == "mean_distance":
+            distances = cdist(self.centers, self.centers)
+            positive = distances[distances > 0.0]
+            self.sigma_ = float(positive.mean()) if len(positive) else 1.0
+            if not np.isfinite(self.sigma_) or self.sigma_ <= 1e-12:
+                self.sigma_ = 1.0
+        else:
+            raise ValueError("width must be one of {'paper', 'mean_distance'}.")
+        self.gamma_ = 1.0 / (2.0 * self.sigma_**2)
 
     def fit(self, X, y):
-        X = np.asarray(X)
-        y = np.asarray(y).reshape(-1, 1)
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y, dtype=float).reshape(-1, 1)
         n_samples, n_var = X.shape
-        n_centers = n_var if self.n_centers is None else self.n_centers
-        n_centers = min(n_samples, n_centers)
+        n_centers = self._resolve_n_centers(n_samples, n_var)
 
         kmeans = KMeans(
             n_clusters=n_centers,
@@ -40,11 +79,16 @@ class RBFN:
         )
         kmeans.fit(X)
         self.centers = kmeans.cluster_centers_
+        self._set_width_from_centers()
 
         phi = self._rbf(cdist(X, self.centers))
+        self.activation_mean_ = float(phi.mean())
+        self.n_centers_ = int(n_centers)
+        self.n_samples_fit_ = int(n_samples)
         a = phi.T @ phi + self.lambda_reg * np.eye(n_centers)
         b = phi.T @ y
         self.weights = np.linalg.solve(a, b)
+        return self
 
     def predict(self, X_new):
         phi_new = self._rbf(cdist(np.asarray(X_new), self.centers))
@@ -63,14 +107,16 @@ def _scale_inputs(X, x_min, x_max):
 class SurrogateRBFN:
     def __init__(
         self,
-        gamma=0.5,
+        width="paper",
+        center_cap="none",
         lambda_reg=1e-6,
         random_state=0,
         x_min=None,
         x_max=None,
     ):
         self.model = None
-        self.gamma = gamma
+        self.width = width
+        self.center_cap = center_cap
         self.lambda_reg = lambda_reg
         self.random_state = random_state
         self.x_min = None if x_min is None else np.asarray(x_min, dtype=float)
@@ -85,7 +131,8 @@ class SurrogateRBFN:
         X_scaled = _scale_inputs(X, self.x_min, self.x_max)
         rbfn = RBFN(
             n_centers=X_scaled.shape[1],
-            gamma=self.gamma,
+            width=self.width,
+            center_cap=self.center_cap,
             lambda_reg=self.lambda_reg,
             random_state=self.random_state,
         )
@@ -97,31 +144,33 @@ class SurrogateRBFN:
 
 
 class Generator(nn.Module):
-    def __init__(self, z_dim, n_var, n_obj):
+    def __init__(self, n_var, n_obj, hidden_layers=1):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(z_dim, n_var),
-            nn.ReLU(),
-            nn.Linear(n_var, n_var),
-            nn.ReLU(),
-            nn.Linear(n_var, n_var + n_obj),
-            nn.Tanh(),
-        )
+        hidden_layers = int(hidden_layers)
+        if hidden_layers < 1:
+            raise ValueError("hidden_layers must be at least 1.")
+        layers = [nn.Linear(n_var, n_var), nn.ReLU()]
+        for _ in range(hidden_layers - 1):
+            layers.extend((nn.Linear(n_var, n_var), nn.ReLU()))
+        layers.extend((nn.Linear(n_var, n_var + n_obj), nn.Tanh()))
+        self.net = nn.Sequential(*layers)
+        self.latent_dim = int(n_var)
 
     def forward(self, z):
         return self.net(z)
 
 
 class Discriminator(nn.Module):
-    def __init__(self, n_var, n_obj):
+    def __init__(self, n_var, n_obj, hidden_layers=1):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_var + n_obj, n_var),
-            nn.ReLU(),
-            nn.Linear(n_var, n_var),
-            nn.ReLU(),
-            nn.Linear(n_var, 1),
-        )
+        hidden_layers = int(hidden_layers)
+        if hidden_layers < 1:
+            raise ValueError("hidden_layers must be at least 1.")
+        layers = [nn.Linear(n_var + n_obj, n_var), nn.ReLU()]
+        for _ in range(hidden_layers - 1):
+            layers.extend((nn.Linear(n_var, n_var), nn.ReLU()))
+        layers.append(nn.Linear(n_var, 1))
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.net(x)
@@ -153,7 +202,7 @@ def train_wgan_gp(
     n_obj,
     n_epochs=2000,
     batch_size=64,
-    z_dim=32,
+    gan_hidden_layers=1,
     lambda_gp=10.0,
     n_critic=5,
     lr=1e-4,
@@ -173,8 +222,10 @@ def train_wgan_gp(
         raise ValueError(
             f"Invalid WGAN dimensions: d_dim={d_dim}, n_obj={n_obj}."
         )
-    generator = Generator(z_dim, n_var, n_obj).to(device)
-    discriminator = Discriminator(n_var, n_obj).to(device)
+    generator = Generator(n_var, n_obj, hidden_layers=gan_hidden_layers).to(device)
+    discriminator = Discriminator(
+        n_var, n_obj, hidden_layers=gan_hidden_layers
+    ).to(device)
 
     optimizer_g = optim.Adam(generator.parameters(), lr=lr, betas=(0.5, 0.9))
     optimizer_d = optim.Adam(discriminator.parameters(), lr=lr, betas=(0.5, 0.9))
@@ -191,7 +242,7 @@ def train_wgan_gp(
         real_batch = joint_t[idx]
 
         for _ in range(n_critic):
-            z = torch.randn(batch_size, z_dim, device=device)
+            z = torch.randn(batch_size, n_var, device=device)
             fake_batch = generator(z)
 
             optimizer_d.zero_grad()
@@ -206,7 +257,7 @@ def train_wgan_gp(
             d_loss.backward()
             optimizer_d.step()
 
-        z = torch.randn(batch_size, z_dim, device=device)
+        z = torch.randn(batch_size, n_var, device=device)
         optimizer_g.zero_grad()
         fake_batch = generator(z)
         g_loss = -torch.mean(discriminator(fake_batch))
@@ -225,14 +276,19 @@ def train_wgan_gp(
     return generator, discriminator, device
 
 
-def build_poly_models(X, F, x_min, x_max, degree=2):
+def build_poly_models(X, F, x_min, x_max, degree=2, ridge=False):
     X_scaled = _scale_inputs(X, x_min, x_max)
     polys = []
     regs = []
     for objective_index in range(F.shape[1]):
         poly = PolynomialFeatures(degree=degree, include_bias=True)
         x_poly = poly.fit_transform(X_scaled)
-        reg = LinearRegression().fit(x_poly, F[:, objective_index])
+        reg = (
+            RidgeCV(alphas=np.logspace(-6, 2, 17))
+            if ridge
+            else LinearRegression()
+        )
+        reg.fit(x_poly, F[:, objective_index])
         polys.append(poly)
         regs.append(reg)
     return polys, regs
@@ -255,8 +311,12 @@ def construct_surrogate_pool_with_gan(
     n_models,
     select_ratio=0.2,
     poly_degree=2,
-    gamma_rbfn=0.5,
+    poly_ridge=False,
+    rbf_width="paper",
+    rbf_center_cap="none",
     lambda_rbfn=1e-6,
+    accumulate_synthetic=False,
+    return_diagnostics=False,
     verbose=True,
 ):
     X_init = np.asarray(X_init, dtype=float)
@@ -285,14 +345,22 @@ def construct_surrogate_pool_with_gan(
         x_min,
         x_max,
         degree=poly_degree,
+        ridge=poly_ridge,
     )
 
     def denorm_x(x_normalized):
         return (x_normalized + 1.0) * 0.5 * (x_max - x_min + 1e-12) + x_min
 
     surrogate_pools = [[] for _ in range(n_obj)]
+    accumulated_x = []
+    accumulated_f = []
+    polynomial_values = []
+    activation_means = []
+    fitted_center_counts = []
+    fitted_sigmas = []
+    fitted_sample_counts = []
     for model_index in range(n_models):
-        z = torch.randn(n_samples, generator.net[0].in_features, device=device)
+        z = torch.randn(n_samples, generator.latent_dim, device=device)
         with torch.no_grad():
             joint_syn = generator(z).cpu().numpy()
 
@@ -310,14 +378,21 @@ def construct_surrogate_pool_with_gan(
         top_n = max(1, int(select_ratio * n_samples))
         x_h = x_syn[np.argsort(-scores)[:top_n]]
         f_h = poly_predict(polys, regs, x_h, x_min, x_max)
-        x_train = np.vstack([X_init, x_h])
+        polynomial_values.append(f_h)
+        if accumulate_synthetic:
+            accumulated_x.append(x_h)
+            accumulated_f.append(f_h)
+            x_train = np.vstack([X_init, *accumulated_x])
+            f_train = np.vstack([F_init, *accumulated_f])
+        else:
+            x_train = np.vstack([X_init, x_h])
+            f_train = np.vstack([F_init, f_h])
 
         for objective_index in range(n_obj):
-            y_train = np.vstack(
-                [F_init[:, objective_index : objective_index + 1], f_h[:, objective_index : objective_index + 1]]
-            )
+            y_train = f_train[:, objective_index : objective_index + 1]
             model = SurrogateRBFN(
-                gamma=gamma_rbfn,
+                width=rbf_width,
+                center_cap=rbf_center_cap,
                 lambda_reg=lambda_rbfn,
                 random_state=model_index,
                 x_min=x_min,
@@ -325,6 +400,10 @@ def construct_surrogate_pool_with_gan(
             )
             model.fit(x_train, y_train)
             surrogate_pools[objective_index].append(model)
+            activation_means.append(model.model.activation_mean_)
+            fitted_center_counts.append(model.model.n_centers_)
+            fitted_sigmas.append(model.model.sigma_)
+            fitted_sample_counts.append(model.model.n_samples_fit_)
 
         if verbose:
             print(
@@ -334,7 +413,22 @@ def construct_surrogate_pool_with_gan(
 
     if verbose:
         print("Surrogate pool ready.\n")
-    return surrogate_pools, (x_min, x_max, f_min, f_max)
+    bounds = (x_min, x_max, f_min, f_max)
+    if not return_diagnostics:
+        return surrogate_pools, bounds
+    polynomial_values = np.vstack(polynomial_values)
+    diagnostics = {
+        "rbf_activation_mean": float(np.mean(activation_means)),
+        "rbf_center_count_mean": float(np.mean(fitted_center_counts)),
+        "rbf_sigma_mean": float(np.mean(fitted_sigmas)),
+        "rbf_train_size_min": int(np.min(fitted_sample_counts)),
+        "rbf_train_size_max": int(np.max(fitted_sample_counts)),
+        "poly_prediction_min": polynomial_values.min(axis=0),
+        "poly_prediction_max": polynomial_values.max(axis=0),
+        "observed_objective_min": f_min.copy(),
+        "observed_objective_max": f_max.copy(),
+    }
+    return surrogate_pools, bounds, diagnostics
 
 
 def surrogate_predict_with_ensemble(x, surrogate_pools):
@@ -349,6 +443,23 @@ def surrogate_predict_with_ensemble(x, surrogate_pools):
     return y_mean
 
 
+def discriminator_scores(joint, discriminator, device):
+    joint_t = torch.as_tensor(joint, dtype=torch.float32, device=device)
+    with torch.no_grad():
+        return discriminator(joint_t).cpu().numpy().reshape(-1)
+
+
+def fit_discriminator_score_reference(
+    discriminator,
+    joint_init,
+    device,
+    percentiles=(5.0, 95.0),
+):
+    scores = discriminator_scores(joint_init, discriminator, device)
+    low, high = np.percentile(scores, percentiles)
+    return float(low), float(high)
+
+
 def discriminator_confidence_score(
     x,
     y_pred,
@@ -358,6 +469,8 @@ def discriminator_confidence_score(
     x_max,
     f_min,
     f_max,
+    score_norm="data_minmax",
+    score_reference=None,
 ):
     x_normalized = 2.0 * (x - x_min) / (x_max - x_min + 1e-12) - 1.0
     y_normalized = 2.0 * (y_pred - f_min) / (f_max - f_min + 1e-12) - 1.0
@@ -367,8 +480,21 @@ def discriminator_confidence_score(
         device=device,
     )
     with torch.no_grad():
-        logits = discriminator(joint_t).cpu().numpy().flatten()
-    return expit(logits).reshape(-1, 1)
+        scores = discriminator(joint_t).cpu().numpy().flatten()
+    if score_norm == "sigmoid":
+        confidence = expit(scores)
+    elif score_norm == "data_minmax":
+        if score_reference is None:
+            raise ValueError("data_minmax score normalization requires a reference.")
+        score_low, score_high = (float(value) for value in score_reference)
+        confidence = np.clip(
+            (scores - score_low) / (score_high - score_low + 1e-12),
+            0.0,
+            1.0,
+        )
+    else:
+        raise ValueError("score_norm must be one of {'sigmoid', 'data_minmax'}.")
+    return confidence.reshape(-1, 1)
 
 
 def critical_fitness(
@@ -381,6 +507,8 @@ def critical_fitness(
     f_min,
     f_max,
     alpha_critic=0.1,
+    score_norm="data_minmax",
+    score_reference=None,
 ):
     y_mean = surrogate_predict_with_ensemble(x, surrogate_pools)
     confidence = discriminator_confidence_score(
@@ -392,6 +520,8 @@ def critical_fitness(
         x_max,
         f_min,
         f_max,
+        score_norm=score_norm,
+        score_reference=score_reference,
     )
     # Work in a fit-subset-relative objective space before applying the critic.
     # Multiplying raw objectives reverses the intended preference whenever an
@@ -418,6 +548,8 @@ class DDMOEAGANProblem(Problem):
         f_min,
         f_max,
         alpha_critic=0.1,
+        score_norm="data_minmax",
+        score_reference=None,
     ):
         super().__init__(
             n_var=n_var,
@@ -435,6 +567,8 @@ class DDMOEAGANProblem(Problem):
         self.f_min = f_min
         self.f_max = f_max
         self.alpha_critic = alpha_critic
+        self.score_norm = score_norm
+        self.score_reference = score_reference
 
     def _evaluate(self, X, out, *args, **kwargs):
         out["F"] = critical_fitness(
@@ -447,4 +581,6 @@ class DDMOEAGANProblem(Problem):
             self.f_min,
             self.f_max,
             alpha_critic=self.alpha_critic,
+            score_norm=self.score_norm,
+            score_reference=self.score_reference,
         )

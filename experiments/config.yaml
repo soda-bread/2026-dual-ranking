@@ -70,6 +70,18 @@ sample_sizes_by_problem:
 show_seed_output: False
 dual_ranking_quantile: 0.90
 
+# DDMOEA/GAN keeps Algorithm 1/2 and Eq. (10) unchanged. These switches adapt
+# only the surrogate construction and critic-score scaling to N=50-1000 and
+# decision dimensions up to D=30. Paper-literal alternatives are documented in
+# experiments/README.md and can be restored independently for ablations.
+ddmoea_gan:
+  gan_hidden_layers: 1        # paper architecture
+  poly_ridge: true            # false = paper second-order OLS
+  rbf_width: mean_distance    # paper = sigma 1
+  rbf_center_cap: half_train  # none = paper D centers
+  accumulate_synthetic: false # bagging reading of Algorithm 1
+  score_norm: data_minmax     # sigmoid = legacy implementation
+
 # TabPFN credentials must be provided through TABPFN_PRIMARY_API_KEY and the
 # optional TABPFN_FALLBACK_API_KEY / TABPFN_FALLBACK_API_KEY_2 environment
 # variables. Never store live credentials in this file.
