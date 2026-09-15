@@ -39,6 +39,7 @@ class StandardizerTests(unittest.TestCase):
 class UpstreamCompatibilityTests(unittest.TestCase):
     def test_default_budget_matches_upstream(self):
         config = load_config(Path(__file__).with_name("config.yaml"))
+        self.assertEqual(PROTOCOL_VERSION, "off_moo_dl_baselines_official_pool_v3")
         self.assertEqual(config["optimizer"], {"n_gen": 50, "pop_size": 256})
         self.assertEqual(config["mobo"]["train_gp_data_size"], 256)
 
@@ -53,6 +54,27 @@ class UpstreamCompatibilityTests(unittest.TestCase):
         np.testing.assert_allclose(initial[:2], x[[1, 2]])
         np.testing.assert_allclose(initial[2], x[0])
         self.assertTrue(np.all((initial[3:] >= 0.0) & (initial[3:] <= 1.0)))
+
+    def test_lhs_fill_is_a_function_of_opt_seed_only(self):
+        from pymoo.core.problem import Problem
+
+        problem = Problem(n_var=3, n_obj=2, xl=np.zeros(3), xu=np.ones(3))
+        x = np.array([[0.2, 0.8, 0.5], [0.8, 0.2, 0.5]])
+        y = x[:, :2].copy()
+
+        np.random.seed(314159)
+        caller_state = np.random.get_state()
+        first = upstream_nds_initial_population(x, y, 8, 17, problem)
+        restored_state = np.random.get_state()
+        self.assertEqual(caller_state[0], restored_state[0])
+        np.testing.assert_array_equal(caller_state[1], restored_state[1])
+        self.assertEqual(caller_state[2:], restored_state[2:])
+
+        np.random.seed(271828)
+        repeated = upstream_nds_initial_population(x, y, 8, 17, problem)
+        different = upstream_nds_initial_population(x, y, 8, 18, problem)
+        np.testing.assert_allclose(first, repeated)
+        self.assertFalse(np.allclose(first, different))
 
 
 class ResumeTests(unittest.TestCase):

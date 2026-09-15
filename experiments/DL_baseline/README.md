@@ -25,19 +25,31 @@ small official-pool subsets:
   checkpoint selection (the official test pool is evaluation-only);
 - offline/model seeds and optimization seeds are independent;
 - neural methods use upstream NDS-ordered NSGA-II initialization; when
-  `N < pop_size`, bounded LHS samples fill the shortage;
+  `N < pop_size`, LHS samples from the true problem bounds fill the shortage.
+  This is a deliberate deviation: upstream's `[0, 1]` space is the dataset
+  min-max envelope and includes its test pool;
 - final candidates are evaluated by the true problem only after optimization;
 - HV and IGD+ use the fixed full-training-pool normalization/reference data,
   matching `experiments/config_official_pool.yaml`.
 
 The upstream defaults are 2048-2048 LeakyReLU MLPs, 200 epochs, batch size 128,
 and a 50-generation/256-population NSGA-II run. MOBO keeps the upstream
-non-dominated-first 256-row GP cap, `[0, 1]` bound normalization, one qNEHVI
-proposal batch, 128 MC samples, 256 raw samples, and 10 restarts. For small
-datasets, the GP cap becomes `min(256, N)`. The acquisition starts from the
-upstream `1.1 * nadir` reference; `ensure_dominated_reference: true` moves only
-invalid coordinates below the observed maximization values so qNEHVI remains
-defined on small subsets.
+non-dominated-first 256-row GP cap, one qNEHVI proposal batch, 128 MC samples,
+256 raw samples, and 10 restarts. For small datasets, the GP cap becomes
+`min(256, N)`. When the last admitted Pareto front crosses that cap, upstream
+truncates it by crowding distance, while this adapter keeps its front order.
+
+The qNEHVI reference point starts from the same raw-scale `1.1 * nadir` as
+upstream, then passes through the same objective z-score transform as the GP
+targets. This fixes an upstream scale mismatch in which a raw reference point
+is compared with normalized objectives. Likewise, this implementation scales
+designs once using the true problem bounds. Upstream first min-max normalizes
+them with the full dataset envelope (including its test pool) and then applies
+problem-bound normalization inside MOBO; on RE tasks whose bounds are not
+`[0, 1]`, that double normalization can map candidates outside the bounds.
+`ensure_dominated_reference: true` moves only invalid reference coordinates
+below the observed maximization values so qNEHVI remains defined on small
+subsets.
 
 The small-data adaptation deliberately disables upstream COM's additional 20%
 Pareto pruning so every method receives all selected `N` rows. COM keeps the
@@ -94,3 +106,11 @@ python experiments/DL_baseline/run.py \
 Successful runs are skipped by default. Use `--no-resume` to run them again.
 The summary is appended to `results/dl_baselines.csv`; raw candidates and their
 surrogate/true objectives are stored under `results/candidates/`.
+
+Protocol v3 fixes the LHS-fill seed used by neural methods when `N < 256`.
+Existing neural results for `N=50/100/200` must therefore be rerun. Neural
+results for `N=400/1000` and all MOBO results are numerically unaffected, but
+the v3 resume key intentionally treats their v2 rows as incomplete too. To
+retain those unaffected rows, change only their `protocol_version` field in the
+CSV from `off_moo_dl_baselines_official_pool_v2` to
+`off_moo_dl_baselines_official_pool_v3` before resuming.

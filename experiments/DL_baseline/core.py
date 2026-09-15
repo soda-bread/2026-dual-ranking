@@ -29,7 +29,7 @@ BASELINE_NAMES = (
     "MultipleModels-COM",
     "MOBO-Vallina",
 )
-PROTOCOL_VERSION = "off_moo_dl_baselines_official_pool_v2"
+PROTOCOL_VERSION = "off_moo_dl_baselines_official_pool_v3"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OFFLINE_MOO_ROOT = REPO_ROOT / "external" / "offline-moo"
 
@@ -96,7 +96,7 @@ class Standardizer:
 
 @dataclass(frozen=True)
 class BoundsScaler:
-    """Upstream MOBO's affine normalization from problem bounds to [0, 1]."""
+    """Affine normalization from the true problem bounds to [0, 1]."""
 
     lower: np.ndarray
     span: np.ndarray
@@ -457,8 +457,9 @@ def upstream_nds_initial_population(
     """Reproduce Off-MOO's NDS initialization with a small-data LHS fill.
 
     Upstream takes offline designs in Pareto-front order and fills a population
-    shortage with Latin-hypercube samples.  Its search space is normalized to
-    [0, 1]; this adapter samples directly from the equivalent raw task bounds.
+    shortage with Latin-hypercube samples.  As a deliberate deviation, this
+    adapter samples the true problem bounds.  Upstream instead samples the
+    dataset min-max envelope in [0, 1], which also includes its test pool.
     """
 
     from pymoo.operators.sampling.lhs import LHS
@@ -477,7 +478,15 @@ def upstream_nds_initial_population(
     initial = x_train[ordered[:population_size]].copy()
     shortage = population_size - len(initial)
     if shortage > 0:
-        lhs = LHS().do(problem, shortage, seed=int(opt_seed)).get("X")
+        saved_state = np.random.get_state()
+        np.random.seed(int(opt_seed))
+        try:
+            # pymoo 0.5 uses NumPy's global RNG and silently ignores ``seed``.
+            # Passing that same RNG explicitly also preserves this behavior on
+            # pymoo 0.6+, where an omitted random_state creates a fresh RNG.
+            lhs = LHS().do(problem, shortage, random_state=np.random).get("X")
+        finally:
+            np.random.set_state(saved_state)
         initial = np.vstack((initial, np.asarray(lhs, dtype=float)))
     return np.asarray(
         repair_offline_moo_decisions(problem, initial), dtype=float
@@ -506,10 +515,15 @@ def fit_mobo_predictor(
         if gp_limit is None
         else _nondominated_training_indices(y_train, int(gp_limit))
     )
-    # MOBOContinuous normalizes designs using the problem bounds rather than
-    # empirical moments.  Keep that behavior; fit objective normalization only
-    # on the selected small-data subset to avoid full-pool leakage.
+    # Deviation from upstream: normalize designs once using the true problem
+    # bounds.  Upstream first uses the full dataset min-max envelope (including
+    # its test pool) and then applies problem-bound normalization inside MOBO;
+    # that double transform can map RE-task candidates outside their bounds.
+    # Our NDS cap also keeps final-front order, whereas upstream uses crowding
+    # distance when the last admitted front must be truncated.
     x_scaler = BoundsScaler.fit(x_lower, x_upper)
+    # Fit the objective z-score on the selected offline dataset and use this
+    # same transform for both GP targets and the raw-scale reference point.
     y_scaler = Standardizer.fit(y_train)
     dtype = torch.double
     train_x = torch.as_tensor(
@@ -542,6 +556,8 @@ def optimize_neural(
     pop_size: int,
     opt_seed: int,
 ):
+    set_seed(opt_seed)
+
     from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.core.problem import Problem
     from pymoo.core.repair import Repair
@@ -620,10 +636,10 @@ def optimize_mobo(
     requested_ref = -predictor.y_scaler.transform(
         np.asarray(raw_reference_point, dtype=float).reshape(1, -1)
     )[0]
-    # The upstream 1.1*nadir reference can cease to be dominated after fitting
-    # a very small subset (and is especially fragile for negative objectives).
-    # Preserve it whenever valid, with an explicitly configured small-data
-    # fallback that moves only invalid coordinates below the observations.
+    # The raw reference is upstream's 1.1*nadir, but unlike upstream we apply
+    # the GP target's z-score transform before comparing it with normalized Y.
+    # The optional small-data safeguard moves only invalid coordinates below
+    # observed maximization values so qNEHVI remains well-defined.
     if bool(config.get("ensure_dominated_reference", True)):
         requested_ref = np.minimum(
             requested_ref,
