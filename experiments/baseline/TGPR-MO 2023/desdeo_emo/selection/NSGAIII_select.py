@@ -93,8 +93,8 @@ class NSGAIII_select(SelectionBase):
             # if there is only one front
             if len(fronts) == 1:
                 n_remaining = self.n_survive
-                until_last_front = np.array([], dtype=np.int)
-                niche_count = np.zeros(len(ref_dirs), dtype=np.int)
+                until_last_front = np.array([], dtype=int)
+                niche_count = np.zeros(len(ref_dirs), dtype=int)
 
             # if some individuals already survived
             else:
@@ -237,7 +237,7 @@ class NSGAIII_select(SelectionBase):
         return niche_of_individuals, dist_to_niche
 
     def calc_niche_count(self, n_niches, niche_of_individuals):
-        niche_count = np.zeros(n_niches, dtype=np.int)
+        niche_count = np.zeros(n_niches, dtype=int)
         index, count = np.unique(niche_of_individuals, return_counts=True)
         niche_count[index] = count
         return niche_count

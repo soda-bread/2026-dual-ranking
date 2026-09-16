@@ -290,7 +290,7 @@ class Probability_wrong:
                 self.rank_prob_wrong[i, j] = temp_rank - 0.5
 
     def compute_rank_vectorized(self):
-        vect_prob = np.vectorize(self.compute_probability_wrong, otypes=[np.float], cache=False)
+        vect_prob = np.vectorize(self.compute_probability_wrong, otypes=[float], cache=False)
         for i in range(self.size_f):
             for j in range(self.num_objectives):
                 print(i)

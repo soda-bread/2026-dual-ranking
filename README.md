@@ -13,6 +13,32 @@ results/               Benchmark result txt/csv files
 src/                   Shared data generation, model, optimization, and metric code
 ```
 
+## Repository-local environment
+
+The project is self-contained and must not be run from another repository's
+virtual environment. Python 3.11 and all packages for the 21 methods are
+defined by the root `requirements.txt`. Set up the repository-owned `.venv`
+from the repository root:
+
+```bash
+python3.11 scripts/setup_environment.py
+```
+
+The setup script initializes the pinned `external/offline-moo` submodule,
+creates `.venv`, installs the unified dependency set, and validates it. It does
+not read code, packages, configuration, or data from sibling projects.
+
+Check an existing environment without starting experiments:
+
+```bash
+.venv/bin/python experiments/run_all_methods.py --check-environment
+```
+
+Real unified runs reject any interpreter other than this repository's `.venv`.
+The dependency-free `--list-methods` command remains available before setup;
+after setup, `--dry-run` also routes every child runner through the local
+environment.
+
 ## Benchmark Problem Protocol
 
 The configured suite contains:
@@ -170,6 +196,19 @@ The benchmark notebooks are in `experiments/`. Their standalone default uses
 `N=100` for every configured problem. Edit `experiments/config.yaml` to change
 problem names, seeds, population size, generations, or sample sizes.
 
+All 21 currently supported methods can be dispatched from one top-level entry.
+The default plan currently runs 18 of them:
+
+```bash
+python3 experiments/run_all_methods.py --list-methods
+python3 experiments/run_all_methods.py --dry-run
+.venv/bin/python experiments/run_all_methods.py --resume
+```
+
+The dispatcher uses the official-pool protocol by default and routes methods
+to the main, Off-MOO DL, or generative runner without duplicating algorithm
+implementations. Use `--methods` to select any comma-separated subset.
+
 Main notebooks include:
 
 ```text
@@ -185,10 +224,11 @@ Exp8_DDMOEA_GAN_2024.ipynb
 
 The XGBoost, Weighted Ensemble, and TabPFN surrogate implementations remain
 available through `src/models.py` and the unified sample-size runner, but they
-no longer have standalone Exp11-Exp13 notebooks. TabPFN is disabled in the
-default run plan and can be enabled explicitly with `--methods`.
+no longer have standalone Exp11-Exp13 notebooks. All three are temporarily
+disabled in the default run plan and can be enabled explicitly with
+`--methods`.
 
-Run the complete default LHS plan from the repository root:
+Run only the main registry's default LHS plan from the repository root:
 
 ```bash
 python experiments/run_all.py --dry-run
@@ -211,5 +251,6 @@ experiments/results/<method_name>.txt
 - In benchmark experiments, the optimizer should not directly use the true oracle during optimization; the oracle is reserved for offline data generation and final evaluation.
 - Molecule requires the optional scientific-design dependencies bundled by the
   upstream offline-moo project.
-- Optional TabPFN credentials are read from environment variables; TabPFN is
-  disabled by default.
+- XGBoost, Weighted Ensemble L2, and TabPFN are disabled by default but remain
+  explicitly selectable. Optional TabPFN credentials are read from environment
+  variables.

@@ -18,7 +18,6 @@ import shutil
 import sys
 import time
 import traceback
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -39,6 +38,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.problem_specs import EXPERIMENT_PROBLEMS
+from experiments.method_registry import (  # noqa: E402
+    BASELINE_FAMILIES,
+    METHOD_REGISTRY,
+    MethodSpec,
+)
 
 
 PROBLEMS = EXPERIMENT_PROBLEMS
@@ -126,36 +130,6 @@ OPT_SEEDS = tuple(int(value) for value in _ablation_config.get("opt_seeds", OPT_
 TEST_SIZE = int(_ablation_config.get("test_size", TEST_SIZE))
 DUAL_RANKING_QUANTILE = float(_root_config.get("dual_ranking_quantile", 0.90))
 
-
-@dataclass(frozen=True)
-class MethodSpec:
-    name: str
-    family: str
-    dual_ranking: bool = False
-
-
-# This is the single source of truth used by the CLI and summary tools.  Names
-# follow the existing scripts/results; no baseline implementation is duplicated.
-METHOD_REGISTRY = {
-    spec.name: spec for spec in (
-        MethodSpec("GPR-RBF + NSGA-II", "gpr_rbf"),
-        MethodSpec("GPR-RBF + NSGA-II + DR", "gpr_rbf", True),
-        MethodSpec("GPR-Matern + NSGA-II", "gpr_matern"),
-        MethodSpec("GPR-Matern + NSGA-II + DR", "gpr_matern", True),
-        MethodSpec("QR + NSGA-II", "qr"),
-        MethodSpec("QR + NSGA-II + DR", "qr", True),
-        MethodSpec("BNN + NSGA-II", "bnn"),
-        MethodSpec("BNN + NSGA-II + DR", "bnn", True),
-        MethodSpec("XGBoost + NSGA-II", "xgboost"),
-        MethodSpec("WeightedEnsemble L2 + NSGA-II", "ensemble"),
-        MethodSpec("TGPR-MO", "tgpr_mo"),
-        MethodSpec("DDMOEA-GAN", "ddmoea_gan"),
-        MethodSpec("Prob-RVEA", "prob_rvea"),
-        MethodSpec("Prob-MOEA/D", "prob_moead"),
-        MethodSpec("TabPFN + NSGA-II", "tabpfn"),
-    )
-}
-BASELINE_FAMILIES = {"prob_rvea", "prob_moead", "tgpr_mo", "ddmoea_gan"}
 
 RESULT_FIELDS = (
     "problem", "method", "dataset_source", "protocol_version",

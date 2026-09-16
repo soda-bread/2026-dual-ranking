@@ -1,6 +1,3 @@
-import sys
-sys.path.insert(1, '/home/amrzr/Work/Codes/TreedGP_MOEA/')
-
 from desdeo_emo.EAs.RVEA import RVEA
 from desdeo_problem.Problem import DataProblem
 from desdeo_problem.surrogatemodels.surrogate_treedGP import treeGP as treedGP

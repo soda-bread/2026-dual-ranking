@@ -11,9 +11,24 @@ archives, documentation builds, and caches remain excluded from Git.
 Run the complete configured experiment plan from the repository root:
 
 ```bash
-python experiments/run_all.py --dry-run
-python experiments/run_all.py --resume
+python3 experiments/run_all_methods.py --dry-run
+.venv/bin/python experiments/run_all_methods.py --check-environment
+.venv/bin/python experiments/run_all_methods.py --resume
 ```
+
+Create `.venv` with `python3.11 scripts/setup_environment.py`. The dispatcher
+uses only that repository-local interpreter for real runs; it never inherits a
+virtual environment belonging to a sibling project.
+
+`run_all_methods.py` is the top-level dispatcher for all 21 supported methods.
+Its default plan runs 18 methods and temporarily skips XGBoost, Weighted
+Ensemble L2, and TabPFN. It routes the 15 main-registry methods, four Off-MOO DL
+baselines, and two generative baselines to their existing runners. All three
+runners share the requested problem, sample-size, seed, output-directory,
+subset-cache, and resume options. Use
+`python3 experiments/run_all_methods.py --list-methods` to inspect the complete
+registry; any skipped method remains available through an explicit `--methods`
+selection.
 
 The executable `Exp*.py` files were generated from their matching notebooks.
 
@@ -46,7 +61,7 @@ problems are supported.
 
 ## Generative baselines
 
-DOMOO, PCD, and ParetoFlow are available in `experiments/generative_baseline`.
+PCD and ParetoFlow are available in `experiments/generative_baseline`.
 They reuse the same official-pool subsets and final HV/IGD+ evaluation protocol;
 see that directory's README for the comparison with the ICLR source tree and
 the run commands.
@@ -62,14 +77,14 @@ The default design is:
 - training sizes: `50, 100, 200, 400, 1000`;
 - offline-data/LHS seeds: `1..10`;
 - optimization seeds: `1..10`.
-- TabPFN is disabled in the default plan; its implementation remains available
-  for an explicit `--methods 'TabPFN + NSGA-II'` run.
+- XGBoost, Weighted Ensemble L2, and TabPFN are disabled in the default plan;
+  their implementations remain available through an explicit `--methods` run.
 
 ```bash
-python experiments/run_all.py --dry-run
-python experiments/run_all.py --resume --max-workers 1
-python experiments/run_all.py --resume --max-workers 72
-python experiments/sample_size_summary.py
+python3 experiments/run_all_methods.py --dry-run
+.venv/bin/python experiments/run_all_methods.py --resume --max-workers 1
+.venv/bin/python experiments/run_all_methods.py --resume --max-workers 72
+.venv/bin/python experiments/sample_size_summary.py
 ```
 
 Methods run as complete stages in the configured/CLI method order.

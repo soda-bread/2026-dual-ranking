@@ -1,5 +1,4 @@
-import sys
-sys.path.insert(1, '/home/amrzr/Work/Codes/TreedGP_MOEA/')
+from pathlib import Path
 
 from desdeo_emo.EAs.RVEA import RVEA
 from desdeo_problem.Problem import DataProblem
@@ -14,8 +13,9 @@ from treedGP_framework import run_treed_GP as treedGP
 import time
 import scipy.io
 
-init_folder = '/home/amrzr/Work/Codes/data/initial_samples/'
-plot_folder = '/home/amrzr/Work/Codes/data/plots_htgp/'
+data_folder = Path(__file__).resolve().parent / "data"
+init_folder = str(data_folder / "initial_samples")
+plot_folder = str(data_folder / "plots_htgp")
 plotting = False
 plotting_sols = False
 

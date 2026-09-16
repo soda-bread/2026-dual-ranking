@@ -1,4 +1,4 @@
-"""Unified runner for DOMOO, PCD, and ParetoFlow.
+"""Unified runner for PCD and ParetoFlow.
 
 Each model is fitted once for an official-pool subset/model seed and then
 sampled independently for every optimization seed.  True objectives are only
@@ -24,15 +24,13 @@ from experiments.generative_baseline.common import (
 )
 
 
-def _fit(method, data, method_config, proxy_config, model_seed, device):
-    if method == "DOMOO":
-        from experiments.generative_baseline.domoo import fit_domoo
-
-        return fit_domoo(data, method_config, proxy_config, model_seed, device)
+def _fit(method, problem, data, method_config, proxy_config, model_seed, device):
     if method == "PCD":
         from experiments.generative_baseline.pcd import fit_pcd
 
-        return fit_pcd(data, method_config, model_seed, device)
+        return fit_pcd(
+            data, method_config, model_seed, device, problem_name=problem
+        )
     if method == "ParetoFlow":
         from experiments.generative_baseline.paretoflow import fit_paretoflow
 
@@ -43,12 +41,6 @@ def _fit(method, data, method_config, proxy_config, model_seed, device):
 
 
 def _generate(method, model, data, method_config, opt_seed, output_size, task):
-    if method == "DOMOO":
-        from experiments.generative_baseline.domoo import generate_domoo
-
-        return generate_domoo(
-            model, data, method_config, opt_seed, output_size, task
-        )
     if method == "PCD":
         from experiments.generative_baseline.pcd import generate_pcd
 
@@ -114,7 +106,7 @@ def run_group(
     )
     relevant_config = {
         "algorithm": method_config,
-        "proxy": proxy_config if method in {"DOMOO", "ParetoFlow"} else None,
+        "proxy": proxy_config if method == "ParetoFlow" else None,
     }
     config_hash = configuration_hash(method, relevant_config)
     pending = []
@@ -138,7 +130,13 @@ def run_group(
     training_started = time.perf_counter()
     try:
         model = _fit(
-            method, data, method_config, proxy_config, offline_seed, device
+            method,
+            problem,
+            data,
+            method_config,
+            proxy_config,
+            offline_seed,
+            device,
         )
         training_time = time.perf_counter() - training_started
         mse_pre = _proxy_mse(method, model, data)

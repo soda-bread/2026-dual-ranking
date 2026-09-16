@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 
 import numpy as np
 
@@ -10,24 +11,29 @@ from experiments.generative_baseline.common import (
     Standardizer,
     condition_points,
     matrix,
+    rank_and_crowding_indices,
     set_seed,
 )
 
 
 def pareto_reweight(scores, bins=30, k=10.0, tau=0.05):
-    """PCD dominance-depth and objective-density sample weights."""
-
-    from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+    """Official PCD dominance-count and objective-bin sample weights."""
 
     scores = matrix(scores, "scores")
-    fronts = NonDominatedSorting().do(scores)
-    rank = np.empty(len(scores), dtype=float)
-    for index, front in enumerate(fronts):
-        rank[np.asarray(front, dtype=int)] = index
-    if np.max(rank) > 0:
-        rank /= np.max(rank)
+    # dominates[j, i] means sample j dominates sample i (minimization).
+    less_equal = scores[:, None, :] <= scores[None, :, :]
+    strictly_less = scores[:, None, :] < scores[None, :, :]
+    dominates = np.all(less_equal, axis=2) & np.any(strictly_less, axis=2)
+    dominance_count = np.sum(dominates, axis=0, dtype=float)
+    span = float(np.max(dominance_count) - np.min(dominance_count))
+    if span > 1e-12:
+        dominance_count = (dominance_count - np.min(dominance_count)) / span
+    else:
+        dominance_count = np.zeros_like(dominance_count)
 
-    bin_count = max(2, min(int(bins), int(np.ceil(len(scores) ** (1 / scores.shape[1])))))
+    bin_count = int(bins)
+    if bin_count < 1:
+        raise ValueError("bins must be positive.")
     cell_columns = []
     for objective in range(scores.shape[1]):
         lo, hi = np.min(scores[:, objective]), np.max(scores[:, objective])
@@ -35,13 +41,23 @@ def pareto_reweight(scores, bins=30, k=10.0, tau=0.05):
             cell_columns.append(np.zeros(len(scores), dtype=int))
         else:
             edges = np.linspace(lo, hi, bin_count + 1)
-            cell_columns.append(np.clip(np.digitize(scores[:, objective], edges[1:-1]), 0, bin_count - 1))
-    cells = list(zip(*cell_columns))
-    counts = {cell: cells.count(cell) for cell in set(cells)}
-    density = np.asarray([counts[cell] for cell in cells], dtype=float)
-    weights = density / (density + float(k)) * np.exp(-rank / max(float(tau), 1e-8))
-    weights = np.maximum(weights, 1e-8)
-    return weights / np.mean(weights)
+            cell_columns.append(
+                np.clip(
+                    np.digitize(scores[:, objective], edges[1:-1]),
+                    0,
+                    bin_count - 1,
+                )
+            )
+    cells = np.column_stack(cell_columns)
+    _, inverse = np.unique(cells, axis=0, return_inverse=True)
+    weights = np.zeros(len(scores), dtype=float)
+    for cell in np.unique(inverse):
+        mask = inverse == cell
+        population = int(np.sum(mask))
+        weights[mask] = population / (population + float(k)) * np.exp(
+            -float(np.mean(dominance_count[mask])) / max(float(tau), 1e-8)
+        )
+    return weights
 
 
 def _torch_components():
@@ -66,27 +82,73 @@ def _torch_components():
                 embedding = torch.nn.functional.pad(embedding, (0, self.width - embedding.shape[1]))
             return embedding[:, : self.width]
 
-    class ResidualBlock(nn.Module):
-        def __init__(self, width):
+    class RandomOrLearnedSinusoidalEmbedding(nn.Module):
+        def __init__(self, width, random_features):
             super().__init__()
-            self.norm = nn.LayerNorm(width)
+            if int(width) % 2:
+                raise ValueError("learned_sinusoidal_dim must be even.")
+            self.weights = nn.Parameter(
+                torch.randn(int(width) // 2), requires_grad=not bool(random_features)
+            )
+
+        def forward(self, timesteps):
+            values = timesteps.reshape(-1, 1)
+            frequencies = values * self.weights.reshape(1, -1) * (2.0 * math.pi)
+            return torch.cat((values, frequencies.sin(), frequencies.cos()), dim=1)
+
+    class ResidualBlock(nn.Module):
+        def __init__(self, width, layer_norm):
+            super().__init__()
+            self.norm = nn.LayerNorm(width) if layer_norm else nn.Identity()
             self.linear = nn.Linear(width, width)
 
         def forward(self, values):
             return values + self.linear(torch.relu(self.norm(values)))
 
     class ConditionalDenoiser(nn.Module):
-        def __init__(self, x_dim, y_dim, width=512, depth=4, time_dim=128):
+        def __init__(
+            self,
+            x_dim,
+            y_dim,
+            width=512,
+            depth=4,
+            time_dim=128,
+            learned_sinusoidal_cond=False,
+            random_fourier_features=True,
+            learned_sinusoidal_dim=16,
+            layer_norm=False,
+        ):
             super().__init__()
-            self.time = SinusoidalTimeEmbedding(time_dim)
-            self.input = nn.Linear(int(x_dim) + int(y_dim) + int(time_dim), int(width))
-            self.blocks = nn.Sequential(*(ResidualBlock(int(width)) for _ in range(int(depth))))
+            if learned_sinusoidal_cond or random_fourier_features:
+                embedding = RandomOrLearnedSinusoidalEmbedding(
+                    learned_sinusoidal_dim, random_fourier_features
+                )
+                embedding_dim = int(learned_sinusoidal_dim) + 1
+            else:
+                embedding = SinusoidalTimeEmbedding(time_dim)
+                embedding_dim = int(time_dim)
+            self.time = nn.Sequential(
+                embedding,
+                nn.Linear(embedding_dim, int(time_dim)),
+                nn.SiLU(),
+                nn.Linear(int(time_dim), int(time_dim)),
+            )
+            self.projection = nn.Linear(int(x_dim) + int(y_dim), int(time_dim))
+            self.input = nn.Linear(int(time_dim), int(width))
+            self.blocks = nn.Sequential(
+                *(
+                    ResidualBlock(int(width), bool(layer_norm))
+                    for _ in range(int(depth))
+                )
+            )
+            self.final_norm = nn.LayerNorm(int(width)) if layer_norm else nn.Identity()
             self.output = nn.Linear(int(width), int(x_dim))
 
         def forward(self, noisy_x, noise_condition, condition):
             embedded = self.time(noise_condition)
-            hidden = self.input(torch.cat((noisy_x, condition, embedded), dim=1))
-            return self.output(torch.relu(self.blocks(hidden)))
+            hidden = self.projection(torch.cat((noisy_x, condition), dim=1)) + embedded
+            hidden = self.blocks(self.input(hidden))
+            return self.output(torch.relu(self.final_norm(hidden)))
 
     class ConditionalDiffusion(nn.Module):
         """PCD's elucidated-diffusion objective and Heun sampler."""
@@ -233,19 +295,33 @@ class PCDModel:
         self.y_scaler = y_scaler
         self.device = device
 
-    def generate(self, raw_conditions, guidance_scale):
+    def generate(self, conditions, guidance_scale, *, conditions_are_scaled=False):
         import torch
 
+        values = (
+            np.asarray(conditions, dtype=float)
+            if conditions_are_scaled
+            else self.y_scaler.transform(conditions)
+        )
         condition = torch.as_tensor(
-            self.y_scaler.transform(raw_conditions), dtype=torch.float32, device=self.device
+            values, dtype=torch.float32, device=self.device
         )
         self.diffusion.eval()
         generated = self.diffusion.sample(condition, guidance_scale=guidance_scale)
         return self.x_scaler.inverse(generated.detach().cpu().numpy())
 
 
-def fit_pcd(data, config, model_seed, device):
+def _resolved_config(config, problem_name=None):
+    resolved = dict(config)
+    overrides = resolved.pop("re_overrides", {}) or {}
+    if str(problem_name or "").lower().startswith("re"):
+        resolved.update(overrides)
+    return resolved
+
+
+def fit_pcd(data, config, model_seed, device, problem_name=None):
     torch, ConditionalDenoiser, ConditionalDiffusion = _torch_components()
+    config = _resolved_config(config, problem_name)
     set_seed(model_seed)
     x, y = matrix(data["X_train"], "X_train"), matrix(data["y_train"], "y_train")
     x_scaler, y_scaler = Standardizer.fit(x), Standardizer.fit(y)
@@ -257,7 +333,15 @@ def fit_pcd(data, config, model_seed, device):
         device=device,
     )
     denoiser = ConditionalDenoiser(
-        x.shape[1], y.shape[1], config["width"], config["depth"], config["time_dim"]
+        x.shape[1],
+        y.shape[1],
+        config["width"],
+        config["depth"],
+        config["time_dim"],
+        config.get("learned_sinusoidal_cond", False),
+        config.get("random_fourier_features", True),
+        config.get("learned_sinusoidal_dim", 16),
+        config.get("layer_norm", False),
     )
     diffusion = ConditionalDiffusion(
         denoiser,
@@ -273,31 +357,90 @@ def fit_pcd(data, config, model_seed, device):
         config["s_tmax"],
         config["s_noise"],
     ).to(device)
+    no_decay = ("bias", "LayerNorm.weight", "norm.weight", ".g")
+    parameter_groups = [
+        {
+            "params": [
+                parameter
+                for name, parameter in diffusion.named_parameters()
+                if not any(token in name for token in no_decay)
+            ],
+            "weight_decay": float(config["weight_decay"]),
+        },
+        {
+            "params": [
+                parameter
+                for name, parameter in diffusion.named_parameters()
+                if any(token in name for token in no_decay)
+            ],
+            "weight_decay": 0.0,
+        },
+    ]
     optimizer = torch.optim.AdamW(
-        diffusion.parameters(), lr=float(config["learning_rate"]),
-        weight_decay=float(config["weight_decay"]),
+        parameter_groups,
+        lr=float(config["learning_rate"]),
+        betas=tuple(float(value) for value in config.get("adam_betas", (0.9, 0.99))),
     )
+    train_steps = int(config["train_steps"])
+    if train_steps < 1:
+        raise ValueError("PCD train_steps must be positive.")
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, train_steps)
+    ema_decay = float(config.get("ema_decay", 0.995))
+    ema_update_every = int(config.get("ema_update_every", 10))
+    if ema_update_every < 1:
+        raise ValueError("PCD ema_update_every must be positive.")
+    ema_diffusion = deepcopy(diffusion).eval()
+    for parameter in ema_diffusion.parameters():
+        parameter.requires_grad_(False)
     batch_size = min(int(config["batch_size"]), len(x))
-    for _ in range(int(config["train_steps"])):
+    for step in range(train_steps):
         indices = torch.randint(0, len(x), (batch_size,), device=device)
         optimizer.zero_grad(set_to_none=True)
         loss = diffusion.loss(
             x_tensor[indices], y_tensor[indices], weights[indices], config["cond_drop_prob"]
         )
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(diffusion.parameters(), 10.0)
+        torch.nn.utils.clip_grad_norm_(
+            diffusion.parameters(), float(config.get("gradient_clip_norm", 1.0))
+        )
         optimizer.step()
-    return PCDModel(diffusion, x_scaler, y_scaler, device)
+        scheduler.step()
+        if step == 0:
+            ema_diffusion.load_state_dict(diffusion.state_dict())
+        elif step % ema_update_every == 0:
+            with torch.no_grad():
+                for ema_parameter, parameter in zip(
+                    ema_diffusion.parameters(), diffusion.parameters()
+                ):
+                    ema_parameter.mul_(ema_decay).add_(
+                        parameter.detach(), alpha=1.0 - ema_decay
+                    )
+                for ema_buffer, buffer in zip(
+                    ema_diffusion.buffers(), diffusion.buffers()
+                ):
+                    ema_buffer.copy_(buffer)
+    return PCDModel(ema_diffusion, x_scaler, y_scaler, device)
 
 
 def generate_pcd(model, data, config, opt_seed, output_size, task):
     from src.offline_moo_adapter import repair_offline_moo_decisions
 
     set_seed(opt_seed)
+    y_train = matrix(data["y_train"], "y_train")
+    d_best = rank_and_crowding_indices(y_train, min(256, len(y_train)))
+    scaled_objectives = model.y_scaler.transform(y_train[d_best])
     targets = condition_points(
-        data["y_train"], output_size, opt_seed,
-        alpha_range=tuple(config["alpha_range"]), noise=config["condition_noise"],
+        scaled_objectives,
+        output_size,
+        opt_seed,
+        alpha_range=tuple(config["alpha_range"]),
+        noise=config["condition_noise"],
+        max_base_points=int(config.get("condition_base_points", 32)),
     )
-    candidates = model.generate(targets, config["guidance_scale"])
-    candidates = np.clip(candidates, np.asarray(task.problem.xl), np.asarray(task.problem.xu))
+    candidates = model.generate(
+        targets, config["guidance_scale"], conditions_are_scaled=True
+    )
+    candidates = np.clip(
+        candidates, np.asarray(task.problem.xl), np.asarray(task.problem.xu)
+    )
     return repair_offline_moo_decisions(task.problem, candidates), None

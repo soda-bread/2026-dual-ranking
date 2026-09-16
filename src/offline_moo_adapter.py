@@ -1,6 +1,5 @@
 import contextlib
 import io
-import os
 import sys
 import warnings
 from pathlib import Path
@@ -55,16 +54,13 @@ def is_offline_moo_problem(problem_name):
 
 
 def offline_moo_root():
-    configured_root = os.getenv("OFFLINE_MOO_ROOT")
-    if configured_root:
-        root = Path(configured_root)
-    else:
-        root = Path(__file__).resolve().parents[1] / "external" / "offline-moo"
+    """Return the repository-owned offline-moo submodule only."""
+
+    root = Path(__file__).resolve().parents[1] / "external" / "offline-moo"
     if not root.exists():
         raise FileNotFoundError(
-            f"offline-moo clone not found at {root}. "
-            "Clone https://github.com/lamda-bbo/offline-moo into external/offline-moo "
-            "or set OFFLINE_MOO_ROOT."
+            f"offline-moo submodule not found at {root}. Run "
+            "`git submodule update --init external/offline-moo` from this repository."
         )
     return root
 

@@ -14,7 +14,13 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-TABPFN_CONFIG_PATH = Path(__file__).resolve().parents[1] / "experiments" / "config.yaml"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_MPL_CACHE = REPO_ROOT / ".venv" / "cache" / "matplotlib"
+if (REPO_ROOT / ".venv").is_dir():
+    PROJECT_MPL_CACHE.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_MPL_CACHE))
+
+TABPFN_CONFIG_PATH = REPO_ROOT / "experiments" / "config.yaml"
 _TABPFN_CONFIG_TOKENS = None
 _TABPFN_CONFIG_NAMES = (
     "tabpfn_primary_api_key",

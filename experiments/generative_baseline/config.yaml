@@ -1,5 +1,5 @@
 # Generative baselines under dual-ranking's paired official-pool protocol.
-methods: [DOMOO, PCD, ParetoFlow]
+methods: [PCD, ParetoFlow]
 
 problems:
   - zdt1
@@ -39,44 +39,31 @@ offline_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 optimization_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 output_size: 100
 
-# Shared MultipleModels-Vallina proxy. DOMOO and ParetoFlow reuse the
-# implementation in experiments/DL_baseline rather than copying it.
+# ParetoFlow reuses the MultipleModels-Vallina implementation in
+# experiments/DL_baseline rather than copying it.
 proxy:
   hidden_sizes: [2048, 2048]
   epochs: 200
   batch_size: 128
   learning_rate: 0.001
 
-domoo:
-  energy_hidden_sizes: [512, 512]
-  energy_learning_rate: 0.001
-  energy_epochs: 50
-  batch_size: 256
-  langevin_step_size: 0.02
-  langevin_steps: 64
-  boundary_langevin_steps: 42
-  pareto_width: 256
-  pareto_learning_rate: 0.001
-  pretrain_epochs: 200
-  training_steps: 300
-  exploration_steps: 200
-  preference_batch_size: 256
-  preference_steps: 1
-  preference_learning_rate: 0.0001
-  risk_ratio: 0.001
-  candidate_count: 1000
-  surrogate_generations: 100
-  surrogate_population: 100
-
 pcd:
   width: 256
   depth: 2
   time_dim: 128
+  learned_sinusoidal_cond: false
+  random_fourier_features: true
+  learned_sinusoidal_dim: 16
+  layer_norm: false
   diffusion_steps: 1024
   train_steps: 1000
   batch_size: 256
   learning_rate: 0.0003
   weight_decay: 0.0
+  adam_betas: [0.9, 0.99]
+  gradient_clip_norm: 1.0
+  ema_decay: 0.995
+  ema_update_every: 10
   cond_drop_prob: 0.15
   guidance_scale: 2.5
   sigma_min: 0.002
@@ -92,8 +79,23 @@ pcd:
   bins: 30
   density_k: 10.0
   tau: 0.05
+  condition_base_points: 32
   alpha_range: [0.1, 0.4]
   condition_noise: 0.05
+  # The official implementation uses a separate configuration for RE tasks.
+  re_overrides:
+    width: 512
+    depth: 4
+    learned_sinusoidal_cond: true
+    random_fourier_features: false
+    layer_norm: true
+    train_steps: 4000
+    batch_size: 512
+    weight_decay: 0.001
+    s_churn: 5.0
+    s_tmin: 0.01
+    s_tmax: 20.0
+    s_noise: 1.005
 
 paretoflow:
   hidden_size: 512
@@ -105,7 +107,12 @@ paretoflow:
   sampling_steps: 1000
   guidance_scale: 2.0
   guidance_threshold: 0.8
-  oversample_factor: 5
+  offspring_count: 5
+  neighborhood_size: 0  # 0 selects n_obj + 1, matching the official runner.
+  stochastic_step: 0.1
+  distance: cosine
+  init_method: d_best
+  adaptive: false
 
 output_dir: results
 subset_cache_dir: ../data_subsets

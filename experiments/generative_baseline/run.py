@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run DOMOO, PCD, and ParetoFlow under the dual-ranking protocol."""
+"""Run PCD and ParetoFlow under the dual-ranking protocol."""
 
 from __future__ import annotations
 
@@ -30,7 +30,6 @@ from src.problem_specs import PROBLEM_SPECS  # noqa: E402
 
 
 METHOD_CONFIG_KEYS = {
-    "DOMOO": "domoo",
     "PCD": "pcd",
     "ParetoFlow": "paretoflow",
 }
@@ -52,22 +51,15 @@ def _smoke_config(config):
     config["proxy"].update(
         hidden_sizes=[32, 32], epochs=1, batch_size=16
     )
-    config["domoo"].update(
-        energy_hidden_sizes=[32, 32],
-        energy_epochs=1,
-        langevin_steps=1,
-        boundary_langevin_steps=1,
-        pareto_width=32,
-        pretrain_epochs=1,
-        training_steps=1,
-        exploration_steps=1,
-        preference_batch_size=8,
-        preference_steps=0,
-        candidate_count=16,
-        surrogate_generations=1,
-        surrogate_population=8,
-    )
     config["pcd"].update(
+        width=32,
+        depth=1,
+        time_dim=16,
+        diffusion_steps=4,
+        train_steps=2,
+        batch_size=16,
+    )
+    config["pcd"].setdefault("re_overrides", {}).update(
         width=32,
         depth=1,
         time_dim=16,
@@ -80,7 +72,7 @@ def _smoke_config(config):
         epochs=1,
         batch_size=16,
         sampling_steps=4,
-        oversample_factor=1,
+        offspring_count=2,
     )
     return config
 

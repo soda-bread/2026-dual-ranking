@@ -22,14 +22,8 @@ from typing import Any, Iterable, Sequence
 import numpy as np
 import yaml
 
+from experiments.DL_baseline import BASELINE_NAMES, PROTOCOL_VERSION
 
-BASELINE_NAMES = (
-    "End2End-Vallina",
-    "MultipleModels-Vallina",
-    "MultipleModels-COM",
-    "MOBO-Vallina",
-)
-PROTOCOL_VERSION = "off_moo_dl_baselines_official_pool_v3"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OFFLINE_MOO_ROOT = REPO_ROOT / "external" / "offline-moo"
 

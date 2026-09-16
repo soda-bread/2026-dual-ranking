@@ -1,6 +1,5 @@
 #import sys
-#sys.path.insert(1, '/scratch/project_2003769/HTGP_MOEA_CSC')
-#sys.path.insert(1, '/home/amrzr/Work/Codes/AmzNew/')
+from pathlib import Path
 
 import Main_Execute_Tests as mexe
 import os
@@ -10,7 +9,7 @@ import os.path
 from os import path
 import pickle
 
-data_folder = '/home/amrzr/Work/Codes/data'
+data_folder = str(Path(__file__).resolve().parent / "data")
 init_folder = data_folder + '/initial_samples'
 main_directory = 'Test_DR_Scratch'
 
@@ -149,4 +148,3 @@ temp = Parallel(n_jobs=parallel_jobs)(
 #    print(e)
 #    with open(data_folder + '/test_runs/'+main_directory+"/log_"+log_time+".txt", "a") as text_file:
 #        text_file.write("\n"+ str(e) + "______" + str(datetime.datetime.now()))      
-

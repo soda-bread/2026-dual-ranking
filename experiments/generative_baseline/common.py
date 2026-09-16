@@ -162,15 +162,6 @@ def proxy_tensor(proxy, x, *, x_is_scaled=False, y_scaled=False):
     return prediction * scale + mean
 
 
-def nondominated_indices(values):
-    from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
-
-    return np.asarray(
-        NonDominatedSorting().do(matrix(values, "objectives"), only_non_dominated_front=True),
-        dtype=int,
-    )
-
-
 def rank_and_crowding_indices(values, target_size):
     from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
@@ -214,57 +205,84 @@ def reference_directions(n_obj, count, seed):
     )
 
 
-def condition_points(y_train, count, seed, alpha_range=(0.1, 0.4), noise=0.05):
-    """PCD-style reference-direction targets extrapolated toward the ideal."""
+def _perpendicular_distances(points, directions):
+    points = np.asarray(points, dtype=np.float64)
+    directions = np.asarray(directions, dtype=np.float64)
+    norms = np.linalg.norm(directions, axis=1, keepdims=True)
+    unit = directions / np.where(norms > 1e-12, norms, 1.0)
+    projections = points @ unit.T
+    closest = projections[:, :, None] * unit[None, :, :]
+    return np.linalg.norm(points[:, None, :] - closest, axis=2)
 
-    y_train = matrix(y_train, "y_train")
+
+def _largest_divisor_at_most(value, limit):
+    value, limit = int(value), min(int(limit), int(value))
+    return max(candidate for candidate in range(1, limit + 1) if value % candidate == 0)
+
+
+def condition_points(
+    y_scaled,
+    count,
+    seed,
+    alpha_range=(0.1, 0.4),
+    noise=0.05,
+    max_base_points=32,
+):
+    """Official PCD reference-direction extrapolation in z-score space."""
+
+    from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+
+    y_scaled = matrix(y_scaled, "y_scaled").astype(np.float64)
+    count = int(count)
+    if count < 1:
+        raise ValueError("count must be positive.")
     rng = np.random.default_rng(int(seed))
-    front = y_train[nondominated_indices(y_train)]
-    y_min, y_max = np.min(y_train, axis=0), np.max(y_train, axis=0)
-    scale = np.where(y_max > y_min, y_max - y_min, 1.0)
-    front_unit = (front - y_min) / scale
-    directions = reference_directions(y_train.shape[1], count, seed)
-    direction_norm = np.linalg.norm(directions, axis=1, keepdims=True)
-    direction_norm = np.where(direction_norm > 0, direction_norm, 1.0)
-    directions = directions / direction_norm
-    point_norm = np.linalg.norm(front_unit, axis=1, keepdims=True)
-    safe_points = front_unit / np.where(point_norm > 0, point_norm, 1.0)
-    assignments = np.argmax(safe_points @ directions.T, axis=0)
-    base = front[assignments]
-    alpha = rng.uniform(*alpha_range, size=(int(count), 1))
-    targets = base + alpha * (np.min(front, axis=0, keepdims=True) - base)
-    targets += rng.normal(0.0, float(noise), size=targets.shape) * scale
-    return np.clip(targets, y_min, y_max)
+    k = _largest_divisor_at_most(count, min(max_base_points, len(y_scaled)))
+    directions = reference_directions(y_scaled.shape[1], k, seed)
+    distances = _perpendicular_distances(y_scaled, directions)
+    niches = np.argmin(distances, axis=1)
+    niche_distances = distances[np.arange(len(y_scaled)), niches]
+    fronts = NonDominatedSorting().do(y_scaled)
 
+    selected = np.asarray(fronts[0], dtype=int)
+    if len(selected) > k:
+        selected = rng.choice(selected, size=k, replace=False)
+    else:
+        selected = selected.copy()
 
-def select_domoo_candidates(x, y, offline_y, count):
-    """DOMOO diversity selection: IGD-offline coverage then rank/crowding."""
+    niche_count = np.bincount(niches[selected], minlength=k)
+    for front in fronts[1:]:
+        if len(selected) >= k:
+            break
+        candidates = np.asarray(front, dtype=int)
+        available = np.ones(len(candidates), dtype=bool)
+        while len(selected) < k and np.any(available):
+            candidate_niches = np.unique(niches[candidates[available]])
+            minimum = np.min(niche_count[candidate_niches])
+            least_used = candidate_niches[niche_count[candidate_niches] == minimum]
+            niche = int(rng.choice(least_used))
+            positions = np.where(available & (niches[candidates] == niche))[0]
+            if niche_count[niche] == 0:
+                position = positions[np.argmin(niche_distances[candidates[positions]])]
+            else:
+                position = int(rng.choice(positions))
+            selected = np.append(selected, candidates[position])
+            available[position] = False
+            niche_count[niche] += 1
 
-    x, y, offline_y = matrix(x, "candidates"), matrix(y, "predictions"), matrix(offline_y, "offline_y")
-    front = offline_y[nondominated_indices(offline_y)]
-    chosen: list[int] = []
-    for objective in range(y.shape[1]):
-        index = int(np.argmin(y[:, objective]))
-        if index not in chosen:
-            chosen.append(index)
-    coverage_target = min(int(count) // 2, len(y))
-    remaining = set(range(len(y))) - set(chosen)
-    while len(chosen) < coverage_target and remaining:
-        best_index, best_distance = None, np.inf
-        for index in remaining:
-            proposal = y[chosen + [index]]
-            distance = np.linalg.norm(front[:, None, :] - proposal[None, :, :], axis=2)
-            score = float(np.mean(np.min(distance, axis=1)))
-            if score < best_distance:
-                best_index, best_distance = index, score
-        chosen.append(int(best_index))
-        remaining.remove(int(best_index))
-    if len(chosen) < int(count) and remaining:
-        rest = np.asarray(sorted(remaining), dtype=int)
-        fill = rank_and_crowding_indices(y[rest], int(count) - len(chosen))
-        chosen.extend(rest[fill].tolist())
-    chosen = np.asarray(chosen[: int(count)], dtype=int)
-    return x[chosen], y[chosen]
+    if len(selected) < k:
+        remaining = np.setdiff1d(np.arange(len(y_scaled)), selected)
+        selected = np.append(selected, rng.choice(remaining, k - len(selected), replace=False))
+
+    point_directions = directions[niches[selected]]
+    tiling_factor = count // k
+    base = np.tile(y_scaled[selected], (tiling_factor, 1))
+    tiled_directions = np.tile(point_directions, (tiling_factor, 1))
+    alpha = rng.uniform(*alpha_range, size=(count, 1))
+    targets = base - alpha * tiled_directions
+    if abs(float(noise)) >= 1e-10:
+        targets = rng.normal(targets, scale=float(noise))
+    return targets
 
 
 def evaluate_candidates(problem_name, task, data, candidates, surrogate_y=None):

@@ -6,6 +6,7 @@ import importlib.util
 import concurrent.futures
 import gc
 import multiprocessing as mp
+import os
 import random
 import sys
 import time
@@ -32,6 +33,10 @@ BASELINE_ROOT = REPO_ROOT / "experiments" / "baseline"
 PROB_VENDOR_ROOT = BASELINE_ROOT / "Prob-RVEA and Prob-MOEA-D 2022"
 TGPR_VENDOR_ROOT = BASELINE_ROOT / "TGPR-MO 2023"
 DEFAULT_CONFIG_PATH = REPO_ROOT / "experiments" / "config.yaml"
+PROJECT_MPL_CACHE = REPO_ROOT / ".venv" / "cache" / "matplotlib"
+if (REPO_ROOT / ".venv").is_dir():
+    PROJECT_MPL_CACHE.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_MPL_CACHE))
 
 TOTAL_FUNCTION_EVALUATIONS = 10_000
 POPULATION_SIZE = 100

@@ -1,5 +1,9 @@
 # Off-MOO deep-learning baselines
 
+These methods can be run together with every other repository method through
+`.venv/bin/python experiments/run_all_methods.py`. This directory's `run.py` remains the
+direct entry point for DL-only runs.
+
 This directory adapts four methods from
 [`lamda-bbo/offline-moo`](https://github.com/lamda-bbo/offline-moo):
 
@@ -62,25 +66,26 @@ From the repository root:
 
 ```bash
 git submodule update --init external/offline-moo
-python -m pip install -r experiments/DL_baseline/requirements.txt
+python3.11 scripts/setup_environment.py
 ```
 
-The pinned packages match the legacy upstream environment and are best used
-with Python 3.8. Scientific-design tasks such as `molecule` also require the
-task-specific dependencies and data described by the upstream project.
+The DL requirements redirect to the repository's single Python 3.11 dependency
+set. Historical upstream pins are retained only as provenance in the vendored
+source and must not be installed over this environment. Scientific-design
+tasks such as `molecule` additionally need their repository-owned task data.
 
 ## Usage
 
 Inspect the complete plan without importing PyTorch, Pymoo, or BoTorch:
 
 ```bash
-python experiments/DL_baseline/run.py --dry-run
+python3 experiments/DL_baseline/run.py --dry-run
 ```
 
 Small End2End smoke run:
 
 ```bash
-python experiments/DL_baseline/run.py \
+.venv/bin/python experiments/DL_baseline/run.py \
   --methods End2End-Vallina \
   --problems zdt1 \
   --training-sizes 50 \
@@ -95,7 +100,7 @@ python experiments/DL_baseline/run.py \
 Run all four methods for one paired subset:
 
 ```bash
-python experiments/DL_baseline/run.py \
+.venv/bin/python experiments/DL_baseline/run.py \
   --methods End2End-Vallina,MultipleModels-Vallina,MultipleModels-COM,MOBO-Vallina \
   --problems zdt1 \
   --training-sizes 100 \

@@ -6,12 +6,16 @@ from types import SimpleNamespace
 import numpy as np
 from pymoo.core.problem import Problem
 
-from experiments.generative_baseline.domoo import fit_domoo, generate_domoo
 from experiments.generative_baseline.paretoflow import (
     fit_paretoflow,
     generate_paretoflow,
 )
-from experiments.generative_baseline.pcd import fit_pcd, generate_pcd
+from experiments.generative_baseline.pcd import (
+    _resolved_config,
+    _torch_components,
+    fit_pcd,
+    generate_pcd,
+)
 
 
 class ToyProblem(Problem):
@@ -46,44 +50,24 @@ class ModelSmokeTest(unittest.TestCase):
             "learning_rate": 0.001,
         }
 
-    def test_domoo_fit_and_generate(self):
-        config = {
-            "energy_hidden_sizes": [16, 16],
-            "energy_learning_rate": 0.001,
-            "energy_epochs": 1,
-            "batch_size": 8,
-            "langevin_step_size": 0.02,
-            "langevin_steps": 1,
-            "boundary_langevin_steps": 1,
-            "pareto_width": 16,
-            "pareto_learning_rate": 0.001,
-            "pretrain_epochs": 1,
-            "training_steps": 1,
-            "exploration_steps": 1,
-            "preference_batch_size": 4,
-            "preference_steps": 0,
-            "preference_learning_rate": 0.0001,
-            "risk_ratio": 0.001,
-            "candidate_count": 8,
-            "surrogate_generations": 1,
-            "surrogate_population": 4,
-        }
-        model = fit_domoo(self.data, config, self.proxy, 1, "cpu")
-        x, y = generate_domoo(model, self.data, config, 2, 4, self.task)
-        self.assertEqual(x.shape, (4, 3))
-        self.assertEqual(y.shape, (4, 2))
-        self.assertTrue(np.all(np.isfinite(x)))
-
     def test_pcd_fit_and_generate(self):
         config = {
             "width": 16,
             "depth": 1,
             "time_dim": 8,
+            "learned_sinusoidal_cond": False,
+            "random_fourier_features": True,
+            "learned_sinusoidal_dim": 8,
+            "layer_norm": False,
             "diffusion_steps": 4,
             "train_steps": 2,
             "batch_size": 8,
             "learning_rate": 0.0003,
             "weight_decay": 0.0,
+            "adam_betas": [0.9, 0.99],
+            "gradient_clip_norm": 1.0,
+            "ema_decay": 0.995,
+            "ema_update_every": 10,
             "cond_drop_prob": 0.15,
             "guidance_scale": 2.5,
             "sigma_min": 0.002,
@@ -99,6 +83,7 @@ class ModelSmokeTest(unittest.TestCase):
             "bins": 4,
             "density_k": 10.0,
             "tau": 0.05,
+            "condition_base_points": 4,
             "alpha_range": [0.1, 0.4],
             "condition_noise": 0.0,
         }
@@ -107,6 +92,30 @@ class ModelSmokeTest(unittest.TestCase):
         self.assertEqual(x.shape, (4, 3))
         self.assertIsNone(y)
         self.assertTrue(np.all(np.isfinite(x)))
+
+    def test_pcd_official_network_layout_and_re_override(self):
+        import torch
+
+        _, ConditionalDenoiser, _ = _torch_components()
+        synthetic = ConditionalDenoiser(
+            3, 2, width=16, depth=2, time_dim=8,
+            learned_sinusoidal_cond=False,
+            random_fourier_features=True,
+            learned_sinusoidal_dim=8,
+            layer_norm=False,
+        )
+        self.assertEqual(synthetic.projection.in_features, 5)
+        self.assertEqual(synthetic.projection.out_features, 8)
+        self.assertEqual(synthetic.input.in_features, 8)
+        self.assertFalse(synthetic.time[0].weights.requires_grad)
+        self.assertFalse(
+            any(isinstance(module, torch.nn.LayerNorm) for module in synthetic.modules())
+        )
+
+        resolved = _resolved_config(
+            {"width": 256, "re_overrides": {"width": 512}}, "re21"
+        )
+        self.assertEqual(resolved["width"], 512)
 
     def test_paretoflow_fit_and_generate(self):
         config = {
@@ -119,7 +128,12 @@ class ModelSmokeTest(unittest.TestCase):
             "sampling_steps": 4,
             "guidance_scale": 2.0,
             "guidance_threshold": 0.5,
-            "oversample_factor": 1,
+            "offspring_count": 2,
+            "neighborhood_size": 0,
+            "stochastic_step": 0.1,
+            "distance": "cosine",
+            "init_method": "d_best",
+            "adaptive": False,
         }
         model = fit_paretoflow(self.data, config, self.proxy, 1, "cpu")
         x, y = generate_paretoflow(model, self.data, config, 2, 4, self.task)
