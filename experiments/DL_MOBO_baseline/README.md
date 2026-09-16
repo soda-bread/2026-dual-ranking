@@ -25,8 +25,10 @@ and default search budget, while adapting data handling to this repository's
 small official-pool subsets:
 
 - nested random-prefix subsets for `N=50/100/200/400/1000`;
-- all selected `N` rows are used for model fitting instead of reserving 10% for
-  checkpoint selection (the official test pool is evaluation-only);
+- all selected `N` rows are used for model fitting. Upstream creates a 90/10
+  train/validation split and reports validation metrics, but the same run does
+  not reload a validation-selected checkpoint; the official test pool remains
+  evaluation-only here;
 - offline/model seeds and optimization seeds are independent;
 - neural methods use upstream NDS-ordered NSGA-II initialization; when
   `N < pop_size`, LHS samples fill the shortage;
@@ -38,16 +40,21 @@ small official-pool subsets:
 - HV and IGD+ use the fixed full-training-pool normalization/reference data,
   matching `experiments/config_official_pool.yaml`.
 
-The upstream defaults are 2048-2048 LeakyReLU MLPs, 200 epochs, batch size 128,
-and a 50-generation/256-population NSGA-II run. MOBO keeps the upstream
-non-dominated-first 256-row GP cap, one qNEHVI proposal batch, 128 MC samples,
-256 raw samples, and 10 restarts. For small datasets, the GP cap becomes
-`min(256, N)`. This repository's non-dominated truncation differs from upstream
+The upstream neural defaults remain 2048-2048 LeakyReLU MLPs, 200 epochs, and
+batch size 128. The comparison budget is intentionally changed from upstream's
+50-generation/256-population run to 100 generations with population 100, so
+every method submits 100 solutions and neural NSGA-II methods use 10,000
+surrogate evaluations. MOBO therefore requests q=100 instead of q=256. It
+keeps the upstream non-dominated-first 256-row GP training cap, 128 MC samples,
+256 raw samples, and 10 restarts; for small datasets, the GP cap becomes
+`min(256, N)`. All DL/MOBO methods, including MOBO, use the same configured
+optimization seeds. This repository's non-dominated truncation differs from upstream
 `get_N_nondominated_index`: when the last Pareto front crosses the cap, the
 upstream helper mistakenly applies a front-local index as a global row index,
 whereas this adapter keeps the correctly addressed front order.
 
-The qNEHVI reference point starts from the same raw-scale `1.1 * nadir` as
+MOBO standardizes each GP objective with a z-score, whereas upstream applies a
+min-max transform. The qNEHVI reference point starts from the same raw-scale `1.1 * nadir` as
 upstream, then passes through the same objective z-score transform as the GP
 targets. This fixes an upstream scale mismatch in which a raw reference point
 is compared with normalized objectives. Likewise, this implementation scales

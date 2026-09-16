@@ -92,6 +92,12 @@ The default design is:
 .venv/bin/python experiments/sample_size_summary.py
 ```
 
+The summary command reads `results_primary_methods` and `results_baselines` by
+default. It merges `exp*_results.csv`, `dl_baselines.csv`, and
+`generative_baselines.csv`, maps `offline_seed` to `lhs_seed` and generative
+`configured_output_size` to the common population-size column, then produces
+one cross-group set of summaries and ranks under `results_summary`.
+
 Methods run as complete stages in the configured/CLI method order.
 With `--max-workers 72`, every method stage can use up to 72 workers. The same
 value is forwarded to the DL/MOBO and generative

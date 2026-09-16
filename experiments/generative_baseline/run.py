@@ -76,12 +76,14 @@ def _smoke_config(config):
     )
     config["paretoflow"].update(
         hidden_size=32,
-        epochs=4,
+        train_steps=4,
+        min_train_steps=2,
         batch_size=16,
         validation_fraction=0.25,
         min_validation_rows=2,
-        patience=1,
+        validation_interval=1,
         validation_repeats=2,
+        patience=1,
         sampling_steps=4,
         offspring_count=2,
     )

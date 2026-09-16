@@ -31,8 +31,8 @@ RESULT_FIELDS = (
     "objective_max", "hv_reference_point_normalized",
     "igdplus_reference_source", "submitted_solution_count",
     "number_of_feasible_solutions", "runtime_training", "runtime_generation",
-    "epochs_trained", "best_validation_loss", "candidate_file", "status",
-    "error_message",
+    "epochs_trained", "training_steps", "best_validation_loss",
+    "candidate_file", "status", "error_message",
 )
 
 

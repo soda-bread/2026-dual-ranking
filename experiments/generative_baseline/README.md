@@ -44,15 +44,20 @@ intermediate predictions and internal diagnostic HV use the shared surrogate
 instead of the true oracle. Final true objectives are still queried only by
 the unified evaluator. The returned archive is repaired against the true task
 bounds, scored by the shared surrogate, and reduced to the requested output
-size by rank and crowding. Flow training reserves a deterministic proportional
-validation split (at least 10 rows for the configured N values), stops after
-the configured patience, and reloads the best checkpoint. Validation averages
-four stochastic CFM losses. This is deliberately cheaper than upstream's NLL
-criterion, which evaluates `log_prob` through 1000-step reverse Euler and a
-Hutchinson trace estimate. The proxy similarly reserves a proportional split,
-decays its learning rate by 0.98 each epoch, and reloads the checkpoint with
-the highest validation PCC. Setting `proxy.trainer: dl_baseline` restores the
-previous cosine-scheduled no-validation behavior.
+size by rank and crowding. Flow training draws mini-batches with replacement
+for at most 10,000 optimizer steps. Early stopping is retained, but cannot stop
+training before 1,000 steps. To make validation comparable on validation sets
+as small as 10 rows, its CFM loss reuses fixed prior samples, time samples, and
+path noise (common random numbers) at every checkpoint; it is evaluated every
+100 steps, averaged over four fixed draws, and the best checkpoint is restored.
+Upstream instead validates with a much more expensive NLL based on `log_prob`,
+1000-step reverse Euler, and a Hutchinson trace estimate over a much larger
+dataset. If there are fewer than twice `min_validation_rows`, validation and
+early stopping are disabled and all configured steps run. The proxy still
+reserves a proportional split, decays its learning rate by 0.98 each epoch, and
+reloads the checkpoint with the highest validation PCC. Setting
+`proxy.trainer: dl_baseline` restores the previous cosine-scheduled
+no-validation proxy behavior.
 
 PCD follows the official dominance-count weighting, fixed 30-bin density
 weighting, residual MLP denoiser, EMA sampling weights, cosine learning-rate
@@ -79,10 +84,10 @@ repository's portfolio repair. PCD conditions are not clipped in objective
 space. Protocol v2 invalidates results produced by the earlier simplified
 ParetoFlow and PCD adapters, so those rows must be rerun.
 
-ParetoFlow rows created before the flow-validation and upstream-proxy training
-keys were added are invalidated automatically by the configuration hash. PCD's
-configuration hash and existing result rows are unchanged; the shared protocol
-version is intentionally not increased.
+ParetoFlow rows created under the earlier epoch/CFM-early-stopping protocol are
+invalidated automatically by the configuration hash. PCD's configuration hash
+and existing result rows are unchanged; the shared protocol version is
+intentionally not increased.
 
 ## Running the Baselines
 
@@ -92,6 +97,10 @@ Dependencies are shared with the existing DL/MOBO baselines:
 git submodule update --init external/offline-moo
 python3.11 scripts/setup_environment.py
 ```
+
+Before a formal run, download each task's official `.npy` pool into
+`external/offline-moo/data/<task>/`. Every pool used with `N=1000` must contain
+at least 1,000 training rows; the official released pools satisfy this.
 
 Independent `(method, problem, N, offline_seed)` groups can use multiple CPU
 workers while optimization seeds within a group reuse one fitted model:

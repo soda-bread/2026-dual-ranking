@@ -172,6 +172,7 @@ def run_group(
             config_hash,
         )
         row["epochs_trained"] = getattr(model, "epochs_trained", np.nan)
+        row["training_steps"] = getattr(model, "training_steps", np.nan)
         row["best_validation_loss"] = getattr(
             model, "best_validation_loss", np.nan
         )

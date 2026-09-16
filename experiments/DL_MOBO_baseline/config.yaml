@@ -44,10 +44,12 @@ optimization_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 max_workers: 1
 
 optimizer:
-  # Upstream Off-MOO defaults. When N < pop_size, the adapter keeps all
-  # NDS-ordered offline rows and fills the shortage with bounded LHS samples.
-  n_gen: 50
-  pop_size: 256
+  # Shared comparison budget: 100 submitted solutions and 10,000 surrogate
+  # evaluations, matching the primary and generative experiment groups.
+  # When N < pop_size, the adapter keeps all NDS-ordered offline rows and fills
+  # the shortage with bounded LHS samples.
+  n_gen: 100
+  pop_size: 100
 
 neural:
   hidden_sizes: [2048, 2048]

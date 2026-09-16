@@ -37,10 +37,10 @@ class StandardizerTests(unittest.TestCase):
 
 
 class UpstreamCompatibilityTests(unittest.TestCase):
-    def test_default_budget_matches_upstream(self):
+    def test_default_budget_matches_shared_comparison_protocol(self):
         config = load_config(Path(__file__).with_name("config.yaml"))
         self.assertEqual(PROTOCOL_VERSION, "off_moo_dl_baselines_official_pool_v3")
-        self.assertEqual(config["optimizer"], {"n_gen": 50, "pop_size": 256})
+        self.assertEqual(config["optimizer"], {"n_gen": 100, "pop_size": 100})
         self.assertEqual(config["mobo"]["train_gp_data_size"], 256)
 
     def test_nds_initialization_and_small_data_fill(self):

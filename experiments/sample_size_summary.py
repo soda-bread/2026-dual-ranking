@@ -23,12 +23,41 @@ def bootstrap_ci(values, seed=2026, samples=10_000):
     return tuple(np.quantile(means, [0.025, 0.975]))
 
 
-def summarize(input_dir: Path, output_dir: Path):
-    paths = sorted((input_dir / "csv").glob("exp*_results.csv"))
-    paths += sorted(input_dir.glob("exp*_results.csv"))
+def _result_paths(input_dirs):
+    if isinstance(input_dirs, (str, Path)):
+        input_dirs = [Path(input_dirs)]
+    paths = []
+    for input_dir in (Path(value) for value in input_dirs):
+        paths.extend(sorted((input_dir / "csv").glob("exp*_results.csv")))
+        paths.extend(sorted(input_dir.glob("exp*_results.csv")))
+        for filename in ("dl_baselines.csv", "generative_baselines.csv"):
+            path = input_dir / filename
+            if path.is_file():
+                paths.append(path)
+    return list(dict.fromkeys(path.resolve() for path in paths))
+
+
+def _normalized_frame(path):
+    frame = pd.read_csv(path)
+    frame["result_source"] = path.name
+    if "lhs_seed" not in frame.columns:
+        frame["lhs_seed"] = frame.get("offline_seed")
+    else:
+        frame["lhs_seed"] = frame["lhs_seed"].fillna(frame.get("offline_seed"))
+    if "configured_pop_size" not in frame.columns:
+        frame["configured_pop_size"] = frame.get("configured_output_size", 100)
+    if "configured_n_gen" not in frame.columns:
+        # Generative methods use a different internal sampler, but participate
+        # in the shared 100-solution/10,000-evaluation comparison protocol.
+        frame["configured_n_gen"] = 100
+    return frame
+
+
+def summarize(input_dir: Path | list[Path], output_dir: Path, *, write_plots=True):
+    paths = _result_paths(input_dir)
     if not paths:
-        raise FileNotFoundError(f"No exp*_results.csv files under {input_dir}")
-    raw = pd.concat((pd.read_csv(path) for path in paths), ignore_index=True)
+        raise FileNotFoundError(f"No experiment result CSV files under {input_dir}")
+    raw = pd.concat((_normalized_frame(path) for path in paths), ignore_index=True)
     if "dataset_source" not in raw.columns:
         raw["dataset_source"] = "lhs"
     else:
@@ -48,26 +77,25 @@ def summarize(input_dir: Path, output_dir: Path):
         else:
             raw[column] = pd.to_numeric(raw[column], errors="coerce").fillna(100)
     run_keys = [
-        "dataset_source", "protocol_version", "configured_n_gen",
-        "configured_pop_size", "problem", "method",
-        "training_size", "lhs_seed", "opt_seed",
+        "dataset_source", "configured_n_gen", "configured_pop_size",
+        "problem", "method", "training_size", "lhs_seed", "opt_seed",
     ]
-    successful = (raw[raw["status"] == "success"].copy()
-                  .drop_duplicates(run_keys, keep="last"))
-    successful_keys = set(successful[run_keys].itertuples(index=False, name=None))
-    failed = raw[raw["status"] != "success"].copy()
-    failed_keys = failed[run_keys].apply(tuple, axis=1)
-    failed = failed[~failed_keys.isin(successful_keys)].copy()
+    # Result files are append-only. The last row is the active configuration
+    # for a method/run key, so stale protocol/configuration rows are not mixed.
+    latest = raw.drop_duplicates(run_keys, keep="last")
+    successful = latest[latest["status"] == "success"].copy()
+    failed = latest[latest["status"] != "success"].copy()
     for metric in METRICS:
         successful[metric] = pd.to_numeric(successful[metric], errors="coerce")
 
     # Stage 1: optimizer variability within each LHS dataset.
     lhs_keys = [
-        "dataset_source", "protocol_version", "configured_n_gen",
-        "configured_pop_size", "problem", "method",
-        "training_size", "lhs_seed",
+        "dataset_source", "configured_n_gen", "configured_pop_size", "problem",
+        "method", "training_size", "lhs_seed",
     ]
     lhs = successful.groupby(lhs_keys, as_index=False).agg(
+        protocol_version=("protocol_version", "last"),
+        result_source=("result_source", "last"),
         optimization_runs=("opt_seed", "nunique"),
         MSEpre=("MSEpre", "first"),
         MSEsur_real_opt_mean=("MSEsur_real", "mean"),
@@ -83,8 +111,8 @@ def summarize(input_dir: Path, output_dir: Path):
     records = []
     for keys, group in lhs.groupby(
         [
-            "dataset_source", "protocol_version", "configured_n_gen",
-            "configured_pop_size", "problem", "method", "training_size",
+            "dataset_source", "configured_n_gen", "configured_pop_size",
+            "problem", "method", "training_size",
         ]
     ):
         for metric, column in (
@@ -96,10 +124,12 @@ def summarize(input_dir: Path, output_dir: Path):
             values = group[column].dropna().to_numpy(float)
             low, high = bootstrap_ci(values)
             records.append({
-                "dataset_source": keys[0], "protocol_version": keys[1],
-                "configured_n_gen": keys[2], "configured_pop_size": keys[3],
-                "problem": keys[4],
-                "method": keys[5], "training_size": keys[6],
+                "dataset_source": keys[0],
+                "configured_n_gen": keys[1], "configured_pop_size": keys[2],
+                "problem": keys[3],
+                "method": keys[4], "training_size": keys[5],
+                "protocol_version": group["protocol_version"].iloc[-1],
+                "result_source": group["result_source"].iloc[-1],
                 "metric": metric, "lhs_count": len(values),
                 "overall_mean": np.mean(values) if len(values) else np.nan,
                 "std": np.std(values, ddof=1) if len(values) > 1 else 0.0 if len(values) else np.nan,
@@ -111,10 +141,10 @@ def summarize(input_dir: Path, output_dir: Path):
     problem_summary = pd.DataFrame(records)
 
     ranks = []
-    for (source, protocol, n_gen, pop_size, size, metric), group in problem_summary.groupby(
+    for (source, n_gen, pop_size, size, metric), group in problem_summary.groupby(
         [
-            "dataset_source", "protocol_version", "configured_n_gen",
-            "configured_pop_size", "training_size", "metric",
+            "dataset_source", "configured_n_gen", "configured_pop_size",
+            "training_size", "metric",
         ]
     ):
         ascending = metric != "HVreal"
@@ -126,7 +156,6 @@ def summarize(input_dir: Path, output_dir: Path):
         average.insert(0, "training_size", size)
         average.insert(0, "configured_pop_size", pop_size)
         average.insert(0, "configured_n_gen", n_gen)
-        average.insert(0, "protocol_version", protocol)
         average.insert(0, "dataset_source", source)
         ranks.append(average.rename(columns={"rank": "average_rank"}))
     average_ranks = pd.concat(ranks, ignore_index=True) if ranks else pd.DataFrame()
@@ -140,8 +169,8 @@ def summarize(input_dir: Path, output_dir: Path):
                      "bootstrap_ci95_low", "bootstrap_ci95_high"]
     method_problem = problem_summary.pivot(
         index=[
-            "dataset_source", "protocol_version", "configured_n_gen",
-            "configured_pop_size", "problem", "method", "training_size",
+            "dataset_source", "configured_n_gen", "configured_pop_size",
+            "problem", "method", "training_size",
         ], columns="metric",
         values=value_columns).reset_index()
     method_problem.columns = [
@@ -152,12 +181,12 @@ def summarize(input_dir: Path, output_dir: Path):
     method_problem.to_csv(csv_output_dir / "method_problem_summary.csv", index=False)
     failed.to_csv(csv_output_dir / "failed_runs.csv", index=False)
 
-    if not average_ranks.empty:
+    if write_plots and not average_ranks.empty:
         import matplotlib.pyplot as plt
-        for (source, protocol, n_gen, pop_size, metric), source_metric in average_ranks.groupby(
+        for (source, n_gen, pop_size, metric), source_metric in average_ranks.groupby(
             [
-                "dataset_source", "protocol_version", "configured_n_gen",
-                "configured_pop_size", "metric",
+                "dataset_source", "configured_n_gen", "configured_pop_size",
+                "metric",
             ]
         ):
             figure, axis = plt.subplots(figsize=(10, 6))
@@ -168,7 +197,7 @@ def summarize(input_dir: Path, output_dir: Path):
             axis.set_xlabel("Training size")
             axis.set_ylabel("Average rank (lower is better)")
             axis.set_title(
-                f"Average rank by training size: {source} | {protocol} | "
+                f"Average rank by training size: {source} | "
                 f"G={n_gen} | P={pop_size} | {metric}"
             )
             axis.grid(alpha=0.25)
@@ -176,7 +205,7 @@ def summarize(input_dir: Path, output_dir: Path):
             figure.tight_layout()
             figure.savefig(
                 output_dir
-                / f"average_rank_{source}_{protocol}_G{n_gen}_P{pop_size}_{metric}.png",
+                / f"average_rank_{source}_G{n_gen}_P{pop_size}_{metric}.png",
                 dpi=180,
             )
             plt.close(figure)
@@ -185,12 +214,21 @@ def summarize(input_dir: Path, output_dir: Path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-dir", type=Path,
-                        default=Path(__file__).resolve().parent / "results")
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        action="append",
+        help="result directory; repeat to merge primary and baseline outputs",
+    )
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args(argv)
-    output = args.output_dir or args.input_dir
-    lhs, problem, ranks, failed = summarize(args.input_dir, output)
+    default_root = Path(__file__).resolve().parent
+    inputs = args.input_dir or [
+        default_root / "results_primary_methods",
+        default_root / "results_baselines",
+    ]
+    output = args.output_dir or default_root / "results_summary"
+    lhs, problem, ranks, failed = summarize(inputs, output)
     print(f"Wrote {len(lhs)} LHS summaries, {len(problem)} method/problem summaries, "
           f"{len(ranks)} average ranks, and {len(failed)} failed runs to {output}")
     return 0

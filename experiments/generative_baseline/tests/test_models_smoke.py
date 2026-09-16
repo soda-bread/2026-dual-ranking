@@ -147,12 +147,14 @@ class ModelSmokeTest(unittest.TestCase):
             "sigma": 0.0,
             "probability_path": "icfm",
             "learning_rate": 0.001,
-            "epochs": 1,
+            "train_steps": 2,
+            "min_train_steps": 1,
             "batch_size": 8,
             "validation_fraction": 0.25,
             "min_validation_rows": 4,
-            "patience": 1,
+            "validation_interval": 1,
             "validation_repeats": 2,
+            "patience": 1,
             "sampling_steps": 4,
             "guidance_scale": 2.0,
             "guidance_threshold": 0.5,
@@ -169,45 +171,51 @@ class ModelSmokeTest(unittest.TestCase):
         self.assertEqual(y.shape, (4, 2))
         self.assertTrue(np.all(np.isfinite(x)))
 
-    def test_paretoflow_early_stops_and_reloads_best_flow(self):
+    def test_paretoflow_early_stopping_waits_for_minimum_steps(self):
         config = {
             "hidden_size": 16,
             "sigma": 0.0,
             "probability_path": "icfm",
-            "learning_rate": 0.001,
-            "epochs": 50,
+            # A zero rate makes the deterministic validation loss constant:
+            # step 5 is best, then patience is exhausted after steps 6 and 7.
+            "learning_rate": 0.0,
+            "train_steps": 20,
+            "min_train_steps": 5,
             "batch_size": 8,
             "validation_fraction": 0.25,
             "min_validation_rows": 4,
-            "patience": 1,
+            "validation_interval": 1,
             "validation_repeats": 2,
+            "patience": 1,
             "sampling_steps": 4,
         }
         model = fit_paretoflow(self.data, config, self.proxy, 3, "cpu")
         self.assertTrue(model.validation_enabled)
-        self.assertLess(model.epochs_trained, 50)
+        self.assertEqual(model.training_steps, 7)
+        self.assertTrue(np.isnan(model.epochs_trained))
         self.assertLessEqual(
-            model.best_validation_loss,
-            model.last_validation_loss,
+            model.best_validation_loss, model.last_validation_loss
         )
 
-    def test_paretoflow_marks_small_data_validation_fallback(self):
+    def test_paretoflow_small_data_fallback_runs_all_steps(self):
         config = {
             "hidden_size": 16,
             "sigma": 0.0,
             "probability_path": "icfm",
             "learning_rate": 0.001,
-            "epochs": 2,
+            "train_steps": 4,
+            "min_train_steps": 2,
             "batch_size": 8,
             "validation_fraction": 0.25,
             "min_validation_rows": 20,
-            "patience": 1,
+            "validation_interval": 1,
             "validation_repeats": 2,
+            "patience": 1,
             "sampling_steps": 4,
         }
-        model = fit_paretoflow(self.data, config, self.proxy, 4, "cpu")
+        model = fit_paretoflow(self.data, config, self.proxy, 3, "cpu")
         self.assertFalse(model.validation_enabled)
-        self.assertEqual(model.epochs_trained, 2)
+        self.assertEqual(model.training_steps, 4)
         self.assertTrue(np.isnan(model.best_validation_loss))
 
     def test_paretoflow_proxy_reloads_maximum_validation_pcc(self):
@@ -253,14 +261,16 @@ class ModelSmokeTest(unittest.TestCase):
 
     def test_paretoflow_new_keys_change_configuration_hash(self):
         old = {
-            "algorithm": {"epochs": 1000},
+            "algorithm": {"epochs": 1000, "patience": 20},
             "proxy": {"epochs": 200},
         }
         new = {
             "algorithm": {
-                "epochs": 1000,
+                "train_steps": 10000,
+                "min_train_steps": 1000,
+                "validation_interval": 100,
+                "validation_repeats": 4,
                 "patience": 20,
-                "validation_fraction": 0.1,
             },
             "proxy": {
                 "epochs": 200,
