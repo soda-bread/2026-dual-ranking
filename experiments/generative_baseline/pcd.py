@@ -319,6 +319,16 @@ def _resolved_config(config, problem_name=None):
     return resolved
 
 
+def _ema_decay_at_step(step, update_after_step, beta, power):
+    """Match ema-pytorch's inverse-power decay after its copy warmup."""
+
+    epoch = int(step) - int(update_after_step) - 1
+    return min(
+        max(1.0 - (1.0 + epoch) ** (-float(power)), 0.0),
+        float(beta),
+    )
+
+
 def fit_pcd(data, config, model_seed, device, problem_name=None):
     torch, ConditionalDenoiser, ConditionalDiffusion = _torch_components()
     config = _resolved_config(config, problem_name)
@@ -385,10 +395,18 @@ def fit_pcd(data, config, model_seed, device, problem_name=None):
     if train_steps < 1:
         raise ValueError("PCD train_steps must be positive.")
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, train_steps)
-    ema_decay = float(config.get("ema_decay", 0.995))
+    ema_beta = float(config.get("ema_beta", config.get("ema_decay", 0.995)))
     ema_update_every = int(config.get("ema_update_every", 10))
+    ema_update_after_step = int(config.get("ema_update_after_step", 100))
+    ema_power = float(config.get("ema_power", 2.0 / 3.0))
     if ema_update_every < 1:
         raise ValueError("PCD ema_update_every must be positive.")
+    if ema_update_after_step < 0:
+        raise ValueError("PCD ema_update_after_step must be non-negative.")
+    if not 0.0 <= ema_beta <= 1.0:
+        raise ValueError("PCD ema_beta must be in [0, 1].")
+    if ema_power <= 0.0:
+        raise ValueError("PCD ema_power must be positive.")
     ema_diffusion = deepcopy(diffusion).eval()
     for parameter in ema_diffusion.parameters():
         parameter.requires_grad_(False)
@@ -405,16 +423,22 @@ def fit_pcd(data, config, model_seed, device, problem_name=None):
         )
         optimizer.step()
         scheduler.step()
-        if step == 0:
+        if step == 0 or (
+            step % ema_update_every == 0 and step <= ema_update_after_step
+        ):
             ema_diffusion.load_state_dict(diffusion.state_dict())
         elif step % ema_update_every == 0:
+            decay = _ema_decay_at_step(
+                step,
+                ema_update_after_step,
+                ema_beta,
+                ema_power,
+            )
             with torch.no_grad():
                 for ema_parameter, parameter in zip(
                     ema_diffusion.parameters(), diffusion.parameters()
                 ):
-                    ema_parameter.mul_(ema_decay).add_(
-                        parameter.detach(), alpha=1.0 - ema_decay
-                    )
+                    ema_parameter.lerp_(parameter.detach(), 1.0 - decay)
                 for ema_buffer, buffer in zip(
                     ema_diffusion.buffers(), diffusion.buffers()
                 ):

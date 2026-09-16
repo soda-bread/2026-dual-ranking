@@ -15,6 +15,7 @@ from experiments.baseline.ddmoea_gan import (
     build_poly_models,
     construct_surrogate_pool_with_gan,
     discriminator_confidence_score,
+    initial_population_has_repeated_rows,
 )
 
 
@@ -69,6 +70,60 @@ class SurrogateSwitchTests(unittest.TestCase):
         self.assertGreater(model.sigma_, 0.0)
         self.assertAlmostEqual(model.gamma_, 1.0 / (2.0 * model.sigma_**2))
         self.assertGreater(model.activation_mean_, 0.0)
+
+    def test_rbfn_fits_paper_bias_term(self):
+        rng = np.random.default_rng(9)
+        x = rng.normal(size=(12, 3))
+        y = np.full(12, 4.25)
+        model = RBFN(n_centers=3, lambda_reg=1e-6).fit(x, y)
+        prediction, _ = model.predict(x)
+        np.testing.assert_allclose(prediction[:, 0], y, atol=1e-6)
+        self.assertAlmostEqual(float(model.bias[0]), 4.25, places=5)
+
+    def test_repeated_initializer_disables_pymoo_duplicate_elimination(self):
+        unique = np.arange(12, dtype=float).reshape(4, 3)
+        repeated = np.vstack((unique, unique[:2]))
+        self.assertFalse(initial_population_has_repeated_rows(unique))
+        self.assertTrue(initial_population_has_repeated_rows(repeated))
+
+    def test_repeated_n50_initializer_preserves_10000_evaluation_budget(self):
+        from pymoo.algorithms.moo.nsga2 import NSGA2
+        from pymoo.core.problem import Problem
+        from pymoo.optimize import minimize
+
+        class ToyProblem(Problem):
+            def __init__(self):
+                super().__init__(
+                    n_var=2,
+                    n_obj=2,
+                    xl=np.zeros(2),
+                    xu=np.ones(2),
+                )
+
+            def _evaluate(self, x, out, *args, **kwargs):
+                out["F"] = np.column_stack(
+                    (x[:, 0], 1.0 - x[:, 0] + x[:, 1])
+                )
+
+        rng = np.random.default_rng(10)
+        fifty_rows = rng.random((50, 2))
+        initial_population = np.vstack((fifty_rows, fifty_rows))
+        algorithm = NSGA2(
+            pop_size=100,
+            sampling=initial_population,
+            eliminate_duplicates=not initial_population_has_repeated_rows(
+                initial_population
+            ),
+        )
+        result = minimize(
+            ToyProblem(),
+            algorithm,
+            ("n_gen", 100),
+            seed=1,
+            verbose=False,
+        )
+        self.assertEqual(result.algorithm.evaluator.n_eval, 10_000)
+        self.assertEqual(len(result.pop), 100)
 
     def test_bagging_and_literal_accumulation(self):
         rng = np.random.default_rng(5)

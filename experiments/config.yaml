@@ -70,10 +70,10 @@ sample_sizes_by_problem:
 show_seed_output: False
 dual_ranking_quantile: 0.90
 
-# DDMOEA/GAN keeps Algorithm 1/2 and Eq. (10) unchanged. These switches adapt
-# only the surrogate construction and critic-score scaling to N=50-1000 and
-# decision dimensions up to D=30. Paper-literal alternatives are documented in
-# experiments/README.md and can be restored independently for ablations.
+# DDMOEA/GAN keeps the mechanisms of Algorithms 1/2. Eq. (10) is applied in
+# fit-subset min-max normalized objective space and then mapped back, preventing
+# sign reversal for negative objectives. These switches adapt surrogate
+# construction and critic-score scaling to N=50-1000 and D up to 30.
 ddmoea_gan:
   gan_hidden_layers: 1        # paper architecture
   poly_ridge: true            # false = paper second-order OLS

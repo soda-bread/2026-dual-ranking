@@ -11,6 +11,7 @@ from experiments.generative_baseline.paretoflow import (
     generate_paretoflow,
 )
 from experiments.generative_baseline.pcd import (
+    _ema_decay_at_step,
     _resolved_config,
     _torch_components,
     fit_pcd,
@@ -66,8 +67,10 @@ class ModelSmokeTest(unittest.TestCase):
             "weight_decay": 0.0,
             "adam_betas": [0.9, 0.99],
             "gradient_clip_norm": 1.0,
-            "ema_decay": 0.995,
+            "ema_beta": 0.995,
             "ema_update_every": 10,
+            "ema_update_after_step": 100,
+            "ema_power": 2.0 / 3.0,
             "cond_drop_prob": 0.15,
             "guidance_scale": 2.5,
             "sigma_min": 0.002,
@@ -116,6 +119,18 @@ class ModelSmokeTest(unittest.TestCase):
             {"width": 256, "re_overrides": {"width": 512}}, "re21"
         )
         self.assertEqual(resolved["width"], 512)
+
+    def test_pcd_official_ema_decay_schedule(self):
+        self.assertAlmostEqual(
+            _ema_decay_at_step(101, 100, 0.995, 2.0 / 3.0), 0.0
+        )
+        self.assertAlmostEqual(
+            _ema_decay_at_step(110, 100, 0.995, 2.0 / 3.0),
+            1.0 - 10.0 ** (-2.0 / 3.0),
+        )
+        self.assertEqual(
+            _ema_decay_at_step(100_000, 100, 0.995, 2.0 / 3.0), 0.995
+        )
 
     def test_paretoflow_fit_and_generate(self):
         config = {

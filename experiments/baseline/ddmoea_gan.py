@@ -30,6 +30,7 @@ class RBFN:
         self.random_state = random_state
         self.centers = None
         self.weights = None
+        self.bias = None
         self.gamma_ = None
         self.sigma_ = None
         self.activation_mean_ = None
@@ -85,16 +86,33 @@ class RBFN:
         self.activation_mean_ = float(phi.mean())
         self.n_centers_ = int(n_centers)
         self.n_samples_fit_ = int(n_samples)
-        a = phi.T @ phi + self.lambda_reg * np.eye(n_centers)
-        b = phi.T @ y
-        self.weights = np.linalg.solve(a, b)
+        # The paper's RBFN is y = sum_i(w_i * phi_i) + bias.  Fit the bias as
+        # an unregularized intercept while retaining the existing ridge term on
+        # the radial-basis weights.
+        design = np.column_stack((phi, np.ones(n_samples)))
+        penalty = np.diag([self.lambda_reg] * n_centers + [0.0])
+        coefficients = np.linalg.solve(
+            design.T @ design + penalty,
+            design.T @ y,
+        )
+        self.weights = coefficients[:-1]
+        self.bias = coefficients[-1]
         return self
 
     def predict(self, X_new):
         phi_new = self._rbf(cdist(np.asarray(X_new), self.centers))
-        mu = phi_new @ self.weights
+        mu = phi_new @ self.weights + self.bias
         std = np.zeros_like(mu)
         return mu, std
+
+
+def initial_population_has_repeated_rows(initial_population):
+    """Return whether a fixed pymoo initializer contains duplicate rows."""
+
+    if initial_population is None:
+        return False
+    population = np.asarray(initial_population)
+    return len(np.unique(population, axis=0)) < len(population)
 
 
 def _scale_inputs(X, x_min, x_max):

@@ -1436,6 +1436,7 @@ def _run_ddmoea_gan_problem(problem_name, benchmark_problem, config, seeds):
         DDMOEAGANProblem,
         construct_surrogate_pool_with_gan,
         fit_discriminator_score_reference,
+        initial_population_has_repeated_rows,
         surrogate_predict_with_ensemble,
         train_wgan_gp,
     )
@@ -1545,6 +1546,14 @@ def _run_ddmoea_gan_problem(problem_name, benchmark_problem, config, seeds):
                 if official_pool_mode
                 else initial_population
             )
+            # N < pop_size intentionally repeats offline rows to preserve the
+            # shared population and evaluation budget.  pymoo 0.6 removes
+            # those rows when duplicate elimination is enabled, leaving an
+            # undersized first generation and fewer than pop_size*n_gen
+            # surrogate evaluations.
+            repeated_initial_rows = initial_population_has_repeated_rows(
+                seed_initial_population
+            )
             start_time = time.time()
             from src.offline_moo_adapter import get_offline_moo_repair
 
@@ -1558,7 +1567,7 @@ def _run_ddmoea_gan_problem(problem_name, benchmark_problem, config, seeds):
                 sampling=seed_initial_population.copy(),
                 crossover=SBX(prob=1.0, eta=20),
                 mutation=PM(prob=1.0 / benchmark_problem.n_var, eta=20),
-                eliminate_duplicates=True,
+                eliminate_duplicates=not repeated_initial_rows,
             )
             if ddmoea_repair is not None:
                 algorithm_kwargs["repair"] = ddmoea_repair

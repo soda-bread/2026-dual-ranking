@@ -50,13 +50,20 @@ rather than reserving the upstream fixed-size validation tail.
 PCD follows the official dominance-count weighting, fixed 30-bin density
 weighting, residual MLP denoiser, EMA sampling weights, cosine learning-rate
 schedule, AdamW parameter groups, and reference-direction conditioning in
-z-score objective space. Its D-best source is the leading 256 solutions (or
-the complete set when smaller) selected from the official-pool subset by
-non-dominated rank and crowding. Synthetic tasks use the published synthetic
-configuration; RE21--RE37 use the wider four-block network and RE-specific
-training and churn values from `config/re.gin`. The official 80/20 split is
-not used because validation is logging-only and would unnecessarily reduce
-these small training subsets.
+z-score objective space. EMA uses the official 100-step copy warmup, 10-step
+update interval, and inverse-power decay capped at 0.995. Its D-best source is
+the leading 256 solutions (or the complete set when smaller) selected from the
+official-pool subset by non-dominated rank and crowding. Synthetic tasks use
+the published synthetic configuration; RE21--RE37 use the wider four-block
+network and RE-specific training and churn values from `config/re.gin`. The
+official 80/20 split is not used because validation is logging-only and would
+unnecessarily reduce these small training subsets.
+
+Two minor training differences are retained for the small-data protocol:
+mini-batches are drawn with replacement on every step instead of iterating
+through epoch-wise shuffled data, and LayerNorm weights are excluded from
+weight decay by the local parameter-name grouping (the upstream grouping may
+decay `ln.weight`).
 
 The common protocol intentionally requests 100 outputs rather than the
 upstream 256, fits x/y standardization on the selected official-pool subset

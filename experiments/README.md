@@ -220,6 +220,14 @@ one-hidden-layer architecture and uses a `D`-dimensional noise vector. The
 - `score_norm: sigmoid` restores the previous mapping, while `data_minmax`
   scales scores by the real offline data's 5th and 95th percentiles.
 
+The paper's RBFN intercept is fitted explicitly. When an offline subset is
+smaller than the NSGA-II population, repeated initializer rows are retained by
+disabling pymoo duplicate elimination for that run; this preserves the exact
+`population_size * n_gen` surrogate-evaluation budget. Eq. (10) is evaluated
+in fit-subset min-max normalized objective space and mapped back to the original
+scale, which is a sign-safe adaptation for objectives containing negative
+values rather than a literal raw-objective application.
+
 Run the appendix diagnostic with the paper's full epoch counts:
 
 ```bash
