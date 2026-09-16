@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from experiments.DL_baseline.core import (
+from experiments.DL_MOBO_baseline.core import (
     BoundsScaler,
     PROTOCOL_VERSION,
     Standardizer,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 
 from experiments.generative_baseline.common import (
@@ -11,6 +13,7 @@ from experiments.generative_baseline.common import (
     rank_and_crowding_indices,
     set_seed,
 )
+from experiments.generative_baseline.proxy import seeded_validation_split
 
 
 def _flow_classes():
@@ -25,10 +28,26 @@ def _flow_classes():
 
 
 class ParetoFlowModel:
-    def __init__(self, flow, proxy, device):
+    def __init__(
+        self,
+        flow,
+        proxy,
+        device,
+        epochs_trained,
+        best_validation_loss,
+        *,
+        validation_enabled,
+        last_validation_loss=float("nan"),
+        validation_loss_history=(),
+    ):
         self.flow = flow
         self.proxy = proxy
         self.device = device
+        self.epochs_trained = int(epochs_trained)
+        self.best_validation_loss = float(best_validation_loss)
+        self.validation_enabled = bool(validation_enabled)
+        self.last_validation_loss = float(last_validation_loss)
+        self.validation_loss_history = tuple(validation_loss_history)
 
 
 def fit_paretoflow(data, config, proxy_config, model_seed, device):
@@ -46,6 +65,21 @@ def fit_paretoflow(data, config, proxy_config, model_seed, device):
     x_scaled = torch.as_tensor(
         proxy.x_scaler.transform(x), dtype=torch.float32, device=device
     )
+    # Proxy training consumes RNG state, so reset before the flow split and
+    # initialization to keep both controlled only by model_seed.
+    set_seed(model_seed)
+    train_indices, validation_indices, validation_enabled = seeded_validation_split(
+        len(x),
+        config.get("validation_fraction", 0.1),
+        config.get("min_validation_rows", 10),
+        model_seed,
+    )
+    train_indices = torch.as_tensor(train_indices, dtype=torch.long, device=device)
+    validation_indices = torch.as_tensor(
+        validation_indices, dtype=torch.long, device=device
+    )
+    x_train = x_scaled[train_indices]
+    x_validation = x_scaled[validation_indices] if validation_enabled else None
     flow = paretoflow_nets.FlowMatching(
         paretoflow_nets.VectorFieldNet(x.shape[1], int(config["hidden_size"])),
         float(config["sigma"]),
@@ -54,17 +88,68 @@ def fit_paretoflow(data, config, proxy_config, model_seed, device):
         prob_path=str(config["probability_path"]),
     ).to(device)
     optimizer = torch.optim.Adam(flow.parameters(), lr=float(config["learning_rate"]))
-    batch_size = min(int(config["batch_size"]), len(x))
-    for _ in range(int(config["epochs"])):
-        permutation = torch.randperm(len(x_scaled), device=device)
-        for start in range(0, len(x_scaled), batch_size):
-            batch = x_scaled[permutation[start : start + batch_size]]
+    epochs = int(config["epochs"])
+    batch_size = min(int(config["batch_size"]), len(x_train))
+    validation_repeats = int(config.get("validation_repeats", 4))
+    patience_limit = int(config.get("patience", 20))
+    if epochs < 1 or batch_size < 1 or validation_repeats < 1:
+        raise ValueError(
+            "ParetoFlow epochs, batch_size, and validation_repeats must be positive."
+        )
+    if patience_limit < 0:
+        raise ValueError("ParetoFlow patience must be non-negative.")
+    best_state = copy.deepcopy(flow.state_dict())
+    best_validation_loss = float("inf")
+    validation_history = []
+    epochs_trained = 0
+    patience = 0
+    for epoch in range(epochs):
+        flow.train()
+        permutation = torch.randperm(len(x_train), device=device)
+        for start in range(0, len(x_train), batch_size):
+            batch = x_train[permutation[start : start + batch_size]]
             optimizer.zero_grad(set_to_none=True)
             loss = flow(batch)
             loss.backward()
             optimizer.step()
+        epochs_trained = epoch + 1
+        if validation_enabled:
+            flow.eval()
+            with torch.no_grad():
+                validation_loss = float(
+                    np.mean(
+                        [
+                            float(flow(x_validation).item())
+                            for _ in range(validation_repeats)
+                        ]
+                    )
+                )
+            validation_history.append(validation_loss)
+            if validation_loss < best_validation_loss:
+                best_validation_loss = validation_loss
+                best_state = copy.deepcopy(flow.state_dict())
+                patience = 0
+            else:
+                patience += 1
+            if patience > patience_limit:
+                break
+    if validation_enabled:
+        flow.load_state_dict(best_state)
+    else:
+        best_validation_loss = float("nan")
     flow.eval()
-    return ParetoFlowModel(flow, proxy, device)
+    return ParetoFlowModel(
+        flow,
+        proxy,
+        device,
+        epochs_trained,
+        best_validation_loss,
+        validation_enabled=validation_enabled,
+        last_validation_loss=(
+            validation_history[-1] if validation_history else float("nan")
+        ),
+        validation_loss_history=validation_history,
+    )
 
 
 class _OfficialPoolTaskAdapter:

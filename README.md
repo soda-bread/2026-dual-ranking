@@ -205,8 +205,25 @@ python3 experiments/run_all_methods.py --dry-run
 .venv/bin/python experiments/run_all_methods.py --resume
 ```
 
+The active suite is also split into two fixed experiment entries. The primary
+entry runs the eight GPR, QR, and BNN methods (including their DR variants).
+The baseline entry runs TGPR-MO, DDMOEA-GAN, Prob-RVEA, Prob-MOEA/D, the four
+Off-MOO DL/MOBO baselines, PCD, and ParetoFlow:
+
+```bash
+python3 experiments/run_primary_methods.py --list-methods
+python3 experiments/run_baselines.py --list-methods
+.venv/bin/python experiments/run_primary_methods.py --resume
+.venv/bin/python experiments/run_baselines.py --resume
+```
+
+Each fixed entry accepts `--methods` only for a subset of its own group.
+Their default outputs are isolated under `experiments/results_primary_methods`
+and `experiments/results_baselines`; both continue to share the official-pool
+subset cache.
+
 The dispatcher uses the official-pool protocol by default and routes methods
-to the main, Off-MOO DL, or generative runner without duplicating algorithm
+to the main, Off-MOO DL/MOBO, or generative runner without duplicating algorithm
 implementations. Use `--methods` to select any comma-separated subset.
 
 Main notebooks include:

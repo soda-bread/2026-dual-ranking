@@ -49,7 +49,12 @@ def _resolve_relative(value, config_path):
 def _smoke_config(config):
     config = copy.deepcopy(config)
     config["proxy"].update(
-        hidden_sizes=[32, 32], epochs=1, batch_size=16
+        trainer="paretoflow_upstream",
+        hidden_sizes=[32, 32],
+        epochs=2,
+        batch_size=16,
+        validation_fraction=0.25,
+        min_validation_rows=2,
     )
     config["pcd"].update(
         width=32,
@@ -69,8 +74,12 @@ def _smoke_config(config):
     )
     config["paretoflow"].update(
         hidden_size=32,
-        epochs=1,
+        epochs=4,
         batch_size=16,
+        validation_fraction=0.25,
+        min_validation_rows=2,
+        patience=1,
+        validation_repeats=2,
         sampling_steps=4,
         offspring_count=2,
     )

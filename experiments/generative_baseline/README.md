@@ -15,7 +15,7 @@ directories, datasets, evaluation scripts, and duplicate network definitions.
 | Aspect | ICLR `model_generative` | dual-ranking implementation |
 | --- | --- | --- |
 | Data | Each method loads, filters, or normalizes data independently | Fixed subsets and train/test splits from `src.official_pool` |
-| Surrogate | ParetoFlow includes a separate multi-model surrogate | Reuses `MultipleModels-Vallina` from `experiments/DL_baseline` |
+| Surrogate | ParetoFlow uses independent objective MLPs with exponential LR decay and validation-PCC checkpoints | Reuses the shared MLP/scaler/predictor components but follows ParetoFlow's own 0.98 LR-decay and validation-PCC checkpoint protocol by default; `trainer: dl_baseline` restores the previous trainer |
 | ParetoFlow network | Method directory contains separate `FlowMatching` and `VectorFieldNet` implementations | Reuses the existing implementations in `external/offline-moo` |
 | True function | Original scripts call it during their respective evaluation stages | Called once by the unified evaluator after final candidates are selected |
 | Metrics | Commonly task min-max normalization, a `1.1` reference point, and D-best | Paper HV reference points, official/full-pool normalization, and IGD+ |
@@ -44,8 +44,15 @@ intermediate predictions and internal diagnostic HV use the shared surrogate
 instead of the true oracle. Final true objectives are still queried only by
 the unified evaluator. The returned archive is repaired against the true task
 bounds, scored by the shared surrogate, and reduced to the requested output
-size by rank and crowding. Flow training uses every row in the selected subset
-rather than reserving the upstream fixed-size validation tail.
+size by rank and crowding. Flow training reserves a deterministic proportional
+validation split (at least 10 rows for the configured N values), stops after
+the configured patience, and reloads the best checkpoint. Validation averages
+four stochastic CFM losses. This is deliberately cheaper than upstream's NLL
+criterion, which evaluates `log_prob` through 1000-step reverse Euler and a
+Hutchinson trace estimate. The proxy similarly reserves a proportional split,
+decays its learning rate by 0.98 each epoch, and reloads the checkpoint with
+the highest validation PCC. Setting `proxy.trainer: dl_baseline` restores the
+previous cosine-scheduled no-validation behavior.
 
 PCD follows the official dominance-count weighting, fixed 30-bin density
 weighting, residual MLP denoiser, EMA sampling weights, cosine learning-rate
@@ -72,9 +79,14 @@ repository's portfolio repair. PCD conditions are not clipped in objective
 space. Protocol v2 invalidates results produced by the earlier simplified
 ParetoFlow and PCD adapters, so those rows must be rerun.
 
+ParetoFlow rows created before the flow-validation and upstream-proxy training
+keys were added are invalidated automatically by the configuration hash. PCD's
+configuration hash and existing result rows are unchanged; the shared protocol
+version is intentionally not increased.
+
 ## Running the Baselines
 
-Dependencies are shared with the existing DL baselines:
+Dependencies are shared with the existing DL/MOBO baselines:
 
 ```bash
 git submodule update --init external/offline-moo

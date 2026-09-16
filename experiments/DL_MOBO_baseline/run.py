@@ -14,7 +14,7 @@ REPO_ROOT = HERE.parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.DL_baseline.core import (  # noqa: E402
+from experiments.DL_MOBO_baseline.core import (  # noqa: E402
     BASELINE_NAMES,
     PROTOCOL_VERSION,
     append_row,

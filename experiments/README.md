@@ -16,14 +16,31 @@ python3 experiments/run_all_methods.py --dry-run
 .venv/bin/python experiments/run_all_methods.py --resume
 ```
 
+Run the two paper experiment groups independently with:
+
+```bash
+# Eight GPR/QR/BNN methods, including the four DR variants.
+.venv/bin/python experiments/run_primary_methods.py --resume
+
+# Ten baselines: four classical main-registry baselines, four Off-MOO DL/MOBO
+# baselines, PCD, and ParetoFlow.
+.venv/bin/python experiments/run_baselines.py --resume
+```
+
+Both entries accept the same problem, sample-size, seed, output, resume, and
+dry-run options as `run_all_methods.py`. An explicit `--methods` selection must
+remain inside that entry's method group. Their default output directories are
+`results_primary_methods` and `results_baselines`, while the subset cache stays
+shared.
+
 Create `.venv` with `python3.11 scripts/setup_environment.py`. The dispatcher
 uses only that repository-local interpreter for real runs; it never inherits a
 virtual environment belonging to a sibling project.
 
 `run_all_methods.py` is the top-level dispatcher for all 21 supported methods.
 Its default plan runs 18 methods and temporarily skips XGBoost, Weighted
-Ensemble L2, and TabPFN. It routes the 15 main-registry methods, four Off-MOO DL
-baselines, and two generative baselines to their existing runners. All three
+Ensemble L2, and TabPFN. It routes the 15 main-registry methods, four Off-MOO
+DL/MOBO baselines, and two generative baselines to their existing runners. All three
 runners share the requested problem, sample-size, seed, output-directory,
 subset-cache, and resume options. Use
 `python3 experiments/run_all_methods.py --list-methods` to inspect the complete

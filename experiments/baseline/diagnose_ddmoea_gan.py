@@ -22,7 +22,7 @@ REPO_ROOT = EXPERIMENTS_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.DL_baseline.core import (  # noqa: E402
+from experiments.DL_MOBO_baseline.core import (  # noqa: E402
     ensure_import_paths,
     fit_neural_predictor,
     resolve_device,

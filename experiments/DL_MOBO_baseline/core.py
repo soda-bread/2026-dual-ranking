@@ -22,7 +22,7 @@ from typing import Any, Iterable, Sequence
 import numpy as np
 import yaml
 
-from experiments.DL_baseline import BASELINE_NAMES, PROTOCOL_VERSION
+from experiments.DL_MOBO_baseline import BASELINE_NAMES, PROTOCOL_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OFFLINE_MOO_ROOT = REPO_ROOT / "external" / "offline-moo"
@@ -189,7 +189,9 @@ def load_config(path: Path) -> dict[str, Any]:
     if unknown:
         raise ValueError(f"Unknown baseline names: {unknown}.")
     if str(config.get("dataset_source", "official_pool")) != "official_pool":
-        raise ValueError("DL baselines currently require dataset_source=official_pool.")
+        raise ValueError(
+            "DL/MOBO baselines currently require dataset_source=official_pool."
+        )
     return config
 
 

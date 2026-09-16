@@ -31,7 +31,8 @@ RESULT_FIELDS = (
     "objective_max", "hv_reference_point_normalized",
     "igdplus_reference_source", "submitted_solution_count",
     "number_of_feasible_solutions", "runtime_training", "runtime_generation",
-    "candidate_file", "status", "error_message",
+    "epochs_trained", "best_validation_loss", "candidate_file", "status",
+    "error_message",
 )
 
 
@@ -125,9 +126,24 @@ def load_data(problem, training_size, offline_seed, all_training_sizes, cache_di
 
 
 def fit_shared_proxy(data, proxy_config, model_seed, device):
-    """Reuse the existing MultipleModels-Vallina implementation."""
+    """Dispatch ParetoFlow proxy training without changing DL/MOBO baselines."""
 
-    from experiments.DL_baseline.core import fit_neural_predictor
+    trainer = str(proxy_config.get("trainer", "dl_baseline"))
+    if trainer == "paretoflow_upstream":
+        from experiments.generative_baseline.proxy import fit_paretoflow_proxy
+
+        return fit_paretoflow_proxy(
+            data,
+            proxy_config,
+            int(model_seed),
+            device,
+        )
+    if trainer != "dl_baseline":
+        raise ValueError(
+            "proxy.trainer must be 'paretoflow_upstream' or 'dl_baseline'."
+        )
+
+    from experiments.DL_MOBO_baseline.core import fit_neural_predictor
 
     return fit_neural_predictor(
         "MultipleModels-Vallina",
@@ -401,9 +417,32 @@ def append_row(path: Path, row: dict[str, Any]) -> None:
     with path.open("a+", newline="", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
+            handle.seek(0)
+            reader = csv.DictReader(handle)
+            existing_rows = list(reader)
+            existing_fields = tuple(reader.fieldnames or ())
+            if existing_fields and existing_fields != RESULT_FIELDS:
+                handle.seek(0)
+                handle.truncate()
+                upgrade_writer = csv.DictWriter(
+                    handle,
+                    fieldnames=RESULT_FIELDS,
+                    extrasaction="ignore",
+                    lineterminator="\n",
+                )
+                upgrade_writer.writeheader()
+                for existing in existing_rows:
+                    upgrade_writer.writerow(
+                        {name: existing.get(name, "") for name in RESULT_FIELDS}
+                    )
             handle.seek(0, os.SEEK_END)
             empty = handle.tell() == 0
-            writer = csv.DictWriter(handle, fieldnames=RESULT_FIELDS, extrasaction="ignore")
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=RESULT_FIELDS,
+                extrasaction="ignore",
+                lineterminator="\n",
+            )
             if empty:
                 writer.writeheader()
             writer.writerow({name: row.get(name, "") for name in RESULT_FIELDS})

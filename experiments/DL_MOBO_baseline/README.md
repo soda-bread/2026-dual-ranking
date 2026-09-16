@@ -1,8 +1,8 @@
-# Off-MOO deep-learning baselines
+# Off-MOO DL and MOBO baselines
 
 These methods can be run together with every other repository method through
-`.venv/bin/python experiments/run_all_methods.py`. This directory's `run.py` remains the
-direct entry point for DL-only runs.
+`.venv/bin/python experiments/run_all_methods.py`. This directory's `run.py`
+remains the direct entry point for DL/MOBO-only runs.
 
 This directory adapts four methods from
 [`lamda-bbo/offline-moo`](https://github.com/lamda-bbo/offline-moo):
@@ -29,9 +29,11 @@ small official-pool subsets:
   checkpoint selection (the official test pool is evaluation-only);
 - offline/model seeds and optimization seeds are independent;
 - neural methods use upstream NDS-ordered NSGA-II initialization; when
-  `N < pop_size`, LHS samples from the true problem bounds fill the shortage.
-  This is a deliberate deviation: upstream's `[0, 1]` space is the dataset
-  min-max envelope and includes its test pool;
+  `N < pop_size`, LHS samples fill the shortage;
+- NSGA-II searches the true task bounds `[xl, xu]`. Upstream searches `[0, 1]`
+  after mapping through a dataset min-max envelope that includes its test pool.
+  The true-bound search keeps a common feasible domain across methods and
+  avoids test-set leakage;
 - final candidates are evaluated by the true problem only after optimization;
 - HV and IGD+ use the fixed full-training-pool normalization/reference data,
   matching `experiments/config_official_pool.yaml`.
@@ -40,8 +42,10 @@ The upstream defaults are 2048-2048 LeakyReLU MLPs, 200 epochs, batch size 128,
 and a 50-generation/256-population NSGA-II run. MOBO keeps the upstream
 non-dominated-first 256-row GP cap, one qNEHVI proposal batch, 128 MC samples,
 256 raw samples, and 10 restarts. For small datasets, the GP cap becomes
-`min(256, N)`. When the last admitted Pareto front crosses that cap, upstream
-truncates it by crowding distance, while this adapter keeps its front order.
+`min(256, N)`. This repository's non-dominated truncation differs from upstream
+`get_N_nondominated_index`: when the last Pareto front crosses the cap, the
+upstream helper mistakenly applies a front-local index as a global row index,
+whereas this adapter keeps the correctly addressed front order.
 
 The qNEHVI reference point starts from the same raw-scale `1.1 * nadir` as
 upstream, then passes through the same objective z-score transform as the GP
@@ -79,13 +83,13 @@ tasks such as `molecule` additionally need their repository-owned task data.
 Inspect the complete plan without importing PyTorch, Pymoo, or BoTorch:
 
 ```bash
-python3 experiments/DL_baseline/run.py --dry-run
+python3 experiments/DL_MOBO_baseline/run.py --dry-run
 ```
 
 Small End2End smoke run:
 
 ```bash
-.venv/bin/python experiments/DL_baseline/run.py \
+.venv/bin/python experiments/DL_MOBO_baseline/run.py \
   --methods End2End-Vallina \
   --problems zdt1 \
   --training-sizes 50 \
@@ -100,7 +104,7 @@ Small End2End smoke run:
 Run all four methods for one paired subset:
 
 ```bash
-.venv/bin/python experiments/DL_baseline/run.py \
+.venv/bin/python experiments/DL_MOBO_baseline/run.py \
   --methods End2End-Vallina,MultipleModels-Vallina,MultipleModels-COM,MOBO-Vallina \
   --problems zdt1 \
   --training-sizes 100 \

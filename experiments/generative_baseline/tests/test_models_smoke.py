@@ -10,12 +10,17 @@ from experiments.generative_baseline.paretoflow import (
     fit_paretoflow,
     generate_paretoflow,
 )
+from experiments.generative_baseline.common import configuration_hash
 from experiments.generative_baseline.pcd import (
     _ema_decay_at_step,
     _resolved_config,
     _torch_components,
     fit_pcd,
     generate_pcd,
+)
+from experiments.generative_baseline.proxy import (
+    compute_pcc,
+    fit_paretoflow_proxy,
 )
 
 
@@ -45,10 +50,14 @@ class ModelSmokeTest(unittest.TestCase):
         }
         cls.task = SimpleNamespace(problem=ToyProblem())
         cls.proxy = {
+            "trainer": "paretoflow_upstream",
             "hidden_sizes": [16, 16],
-            "epochs": 1,
+            "epochs": 2,
             "batch_size": 8,
             "learning_rate": 0.001,
+            "lr_decay": 0.98,
+            "validation_fraction": 0.25,
+            "min_validation_rows": 4,
         }
 
     def test_pcd_fit_and_generate(self):
@@ -140,6 +149,10 @@ class ModelSmokeTest(unittest.TestCase):
             "learning_rate": 0.001,
             "epochs": 1,
             "batch_size": 8,
+            "validation_fraction": 0.25,
+            "min_validation_rows": 4,
+            "patience": 1,
+            "validation_repeats": 2,
             "sampling_steps": 4,
             "guidance_scale": 2.0,
             "guidance_threshold": 0.5,
@@ -155,6 +168,110 @@ class ModelSmokeTest(unittest.TestCase):
         self.assertEqual(x.shape, (4, 3))
         self.assertEqual(y.shape, (4, 2))
         self.assertTrue(np.all(np.isfinite(x)))
+
+    def test_paretoflow_early_stops_and_reloads_best_flow(self):
+        config = {
+            "hidden_size": 16,
+            "sigma": 0.0,
+            "probability_path": "icfm",
+            "learning_rate": 0.001,
+            "epochs": 50,
+            "batch_size": 8,
+            "validation_fraction": 0.25,
+            "min_validation_rows": 4,
+            "patience": 1,
+            "validation_repeats": 2,
+            "sampling_steps": 4,
+        }
+        model = fit_paretoflow(self.data, config, self.proxy, 3, "cpu")
+        self.assertTrue(model.validation_enabled)
+        self.assertLess(model.epochs_trained, 50)
+        self.assertLessEqual(
+            model.best_validation_loss,
+            model.last_validation_loss,
+        )
+
+    def test_paretoflow_marks_small_data_validation_fallback(self):
+        config = {
+            "hidden_size": 16,
+            "sigma": 0.0,
+            "probability_path": "icfm",
+            "learning_rate": 0.001,
+            "epochs": 2,
+            "batch_size": 8,
+            "validation_fraction": 0.25,
+            "min_validation_rows": 20,
+            "patience": 1,
+            "validation_repeats": 2,
+            "sampling_steps": 4,
+        }
+        model = fit_paretoflow(self.data, config, self.proxy, 4, "cpu")
+        self.assertFalse(model.validation_enabled)
+        self.assertEqual(model.epochs_trained, 2)
+        self.assertTrue(np.isnan(model.best_validation_loss))
+
+    def test_paretoflow_proxy_reloads_maximum_validation_pcc(self):
+        import torch
+
+        rng = np.random.default_rng(21)
+        x = rng.normal(size=(48, 3))
+        y = np.column_stack((2.0 * x[:, 0] - x[:, 1], x[:, 2] + x[:, 0]))
+        data = {
+            "X_train": x,
+            "y_train": y,
+        }
+        config = {
+            "hidden_sizes": [16, 16],
+            "epochs": 40,
+            "batch_size": 8,
+            "learning_rate": 0.001,
+            "lr_decay": 0.98,
+            "validation_fraction": 0.25,
+            "min_validation_rows": 4,
+        }
+        predictor = fit_paretoflow_proxy(data, config, 5, "cpu")
+        indices = predictor.validation_indices
+        x_validation = torch.as_tensor(
+            predictor.x_scaler.transform(x[indices]), dtype=torch.float32
+        )
+        y_validation = torch.as_tensor(
+            predictor.y_scaler.transform(y[indices]), dtype=torch.float32
+        )
+        for objective, model in enumerate(predictor.models):
+            with torch.no_grad():
+                restored_pcc = float(
+                    compute_pcc(
+                        model(x_validation),
+                        y_validation[:, objective : objective + 1],
+                    ).item()
+                )
+            history = predictor.validation_pcc_history[objective]
+            self.assertAlmostEqual(restored_pcc, max(history), places=6)
+            self.assertAlmostEqual(
+                predictor.best_validation_pcc[objective], max(history), places=6
+            )
+
+    def test_paretoflow_new_keys_change_configuration_hash(self):
+        old = {
+            "algorithm": {"epochs": 1000},
+            "proxy": {"epochs": 200},
+        }
+        new = {
+            "algorithm": {
+                "epochs": 1000,
+                "patience": 20,
+                "validation_fraction": 0.1,
+            },
+            "proxy": {
+                "epochs": 200,
+                "trainer": "paretoflow_upstream",
+                "lr_decay": 0.98,
+            },
+        }
+        self.assertNotEqual(
+            configuration_hash("ParetoFlow", old),
+            configuration_hash("ParetoFlow", new),
+        )
 
 
 if __name__ == "__main__":

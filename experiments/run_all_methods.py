@@ -17,7 +17,9 @@ if str(REPO_ROOT) not in sys.path:
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from experiments.DL_baseline import BASELINE_NAMES as DL_METHODS  # noqa: E402
+from experiments.DL_MOBO_baseline import (  # noqa: E402
+    BASELINE_NAMES as DL_MOBO_METHODS,
+)
 from experiments.generative_baseline import (  # noqa: E402
     BASELINE_NAMES as GENERATIVE_METHODS,
 )
@@ -35,7 +37,7 @@ from experiments.method_registry import (  # noqa: E402
 MAIN_METHODS = tuple(METHOD_REGISTRY)
 METHOD_GROUPS = {
     "main": MAIN_METHODS,
-    "dl": tuple(DL_METHODS),
+    "dl_mobo": tuple(DL_MOBO_METHODS),
     "generative": tuple(GENERATIVE_METHODS),
 }
 ALL_METHODS = tuple(
@@ -43,6 +45,22 @@ ALL_METHODS = tuple(
 )
 DEFAULT_METHODS = tuple(
     method for method in ALL_METHODS if method not in DEFAULT_DISABLED_METHODS
+)
+PRIMARY_EXPERIMENT_METHODS = tuple(
+    method
+    for method in MAIN_METHODS
+    if METHOD_REGISTRY[method].family in {"gpr_rbf", "gpr_matern", "qr", "bnn"}
+)
+MAIN_BASELINE_METHODS = (
+    "TGPR-MO",
+    "DDMOEA-GAN",
+    "Prob-RVEA",
+    "Prob-MOEA/D",
+)
+BASELINE_EXPERIMENT_METHODS = (
+    *MAIN_BASELINE_METHODS,
+    *DL_MOBO_METHODS,
+    *GENERATIVE_METHODS,
 )
 
 
@@ -55,6 +73,45 @@ def _csv(value, cast=str):
 def _append_option(command, option, value):
     if value is not None:
         command.extend((option, str(value)))
+
+
+def fixed_group_main(group_name, methods, argv=None, default_output_dir=None):
+    """Run one fixed experiment family while allowing an in-family subset."""
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--list-methods" in argv:
+        print(f"{group_name} ({len(methods)}):")
+        for method in methods:
+            print(f"  {method}")
+        return 0
+
+    requested = None
+    for index, argument in enumerate(argv):
+        if argument == "--methods":
+            if index + 1 >= len(argv):
+                raise SystemExit("--methods requires a comma-separated value")
+            requested = _csv(argv[index + 1])
+            break
+        if argument.startswith("--methods="):
+            requested = _csv(argument.split("=", 1)[1])
+            break
+
+    if requested is not None:
+        outside_group = sorted(set(requested) - set(methods))
+        if outside_group:
+            raise SystemExit(
+                f"{group_name} entry does not include methods: {outside_group}"
+            )
+    forwarded = list(argv)
+    if requested is None:
+        forwarded[0:0] = ["--methods", ",".join(methods)]
+    has_output_dir = any(
+        argument == "--output-dir" or argument.startswith("--output-dir=")
+        for argument in forwarded
+    )
+    if default_output_dir is not None and not has_output_dir:
+        forwarded[2:2] = ["--output-dir", str(default_output_dir)]
+    return main(forwarded)
 
 
 def parse_args(argv=None):
@@ -99,7 +156,11 @@ def parse_args(argv=None):
     )
     parser.add_argument("--main-config", type=Path)
     parser.add_argument(
-        "--dl-config", type=Path, default=HERE / "DL_baseline" / "config.yaml"
+        "--dl-mobo-config",
+        "--dl-config",
+        dest="dl_mobo_config",
+        type=Path,
+        default=HERE / "DL_MOBO_baseline" / "config.yaml",
     )
     parser.add_argument(
         "--generative-config",
@@ -142,7 +203,9 @@ def parse_args(argv=None):
     if not args.methods and not args.list_methods:
         parser.error("at least one method is required")
 
-    selected_non_main = set(args.methods) & set(DL_METHODS + GENERATIVE_METHODS)
+    selected_non_main = set(args.methods) & set(
+        DL_MOBO_METHODS + GENERATIVE_METHODS
+    )
     if args.dataset_source != "official_pool" and selected_non_main:
         parser.error(
             "DL and generative methods require --dataset-source official_pool; "
@@ -159,7 +222,7 @@ def parse_args(argv=None):
 
     for label, path in (
         ("main", args.main_config),
-        ("DL", args.dl_config),
+        ("DL/MOBO", args.dl_mobo_config),
         ("generative", args.generative_config),
     ):
         if not path.is_file():
@@ -219,14 +282,14 @@ def build_commands(args):
             command.append("--dry-run")
         commands.append(("main", command))
 
-    if "dl" in groups:
+    if "dl_mobo" in groups:
         command = [
             python,
-            str(HERE / "DL_baseline" / "run.py"),
+            str(HERE / "DL_MOBO_baseline" / "run.py"),
             "--config",
-            str(args.dl_config.resolve()),
+            str(args.dl_mobo_config.resolve()),
             "--methods",
-            ",".join(groups["dl"]),
+            ",".join(groups["dl_mobo"]),
             "--device",
             args.device,
             "--output-dir",
@@ -244,7 +307,7 @@ def build_commands(args):
         _append_option(command, "--epochs", args.epochs)
         if args.dry_run:
             command.append("--dry-run")
-        commands.append(("dl", command))
+        commands.append(("dl_mobo", command))
 
     if "generative" in groups:
         command = [

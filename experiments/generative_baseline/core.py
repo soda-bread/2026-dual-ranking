@@ -171,6 +171,10 @@ def run_group(
             output_size,
             config_hash,
         )
+        row["epochs_trained"] = getattr(model, "epochs_trained", np.nan)
+        row["best_validation_loss"] = getattr(
+            model, "best_validation_loss", np.nan
+        )
         generation_started = time.perf_counter()
         try:
             candidates, surrogate_y = _generate(
