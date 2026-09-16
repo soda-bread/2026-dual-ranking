@@ -16,8 +16,9 @@ src/                   Shared data generation, model, optimization, and metric c
 ## Repository-local environment
 
 The project is self-contained and must not be run from another repository's
-virtual environment. Python 3.11 and all packages for the 21 methods are
-defined by the root `requirements.txt`. Set up the repository-owned `.venv`
+virtual environment. Python 3.11 and packages for the 18 experiment methods,
+plus the three hidden implementations, are defined by the root
+`requirements.txt`. Set up the repository-owned `.venv`
 from the repository root:
 
 ```bash
@@ -28,10 +29,12 @@ The setup script initializes the pinned `external/offline-moo` submodule,
 creates `.venv`, installs the unified dependency set, and validates it. It does
 not read code, packages, configuration, or data from sibling projects.
 
-Check an existing environment without starting experiments:
+Check an existing environment without starting experiments, one experiment
+group at a time:
 
 ```bash
-.venv/bin/python experiments/run_all_methods.py --check-environment
+.venv/bin/python experiments/run_primary_methods.py --check-environment
+.venv/bin/python experiments/run_baselines.py --check-environment
 ```
 
 Real unified runs reject any interpreter other than this repository's `.venv`.
@@ -196,16 +199,7 @@ The benchmark notebooks are in `experiments/`. Their standalone default uses
 `N=100` for every configured problem. Edit `experiments/config.yaml` to change
 problem names, seeds, population size, generations, or sample sizes.
 
-All 21 currently supported methods can be dispatched from one top-level entry.
-The default plan currently runs 18 of them:
-
-```bash
-python3 experiments/run_all_methods.py --list-methods
-python3 experiments/run_all_methods.py --dry-run
-.venv/bin/python experiments/run_all_methods.py --resume
-```
-
-The active suite is also split into two fixed experiment entries. The primary
+The active suite is split into two fixed experiment entries. The primary
 entry runs the eight GPR, QR, and BNN methods (including their DR variants).
 The baseline entry runs TGPR-MO, DDMOEA-GAN, Prob-RVEA, Prob-MOEA/D, the four
 Off-MOO DL/MOBO baselines, PCD, and ParetoFlow:
@@ -217,7 +211,8 @@ python3 experiments/run_baselines.py --list-methods
 .venv/bin/python experiments/run_baselines.py --resume
 ```
 
-Each fixed entry accepts `--methods` only for a subset of its own group.
+Each fixed entry accepts `--methods` only for a subset of its own group. The
+internal dispatcher rejects requests that mix primary methods and baselines.
 Their default outputs are isolated under `experiments/results_primary_methods`
 and `experiments/results_baselines`; both continue to share the official-pool
 subset cache.
@@ -239,11 +234,9 @@ Exp7_TGPR_MO_2023.ipynb
 Exp8_DDMOEA_GAN_2024.ipynb
 ```
 
-The XGBoost, Weighted Ensemble, and TabPFN surrogate implementations remain
-available through `src/models.py` and the unified sample-size runner, but they
-no longer have standalone Exp11-Exp13 notebooks. All three are temporarily
-disabled in the default run plan and can be enabled explicitly with
-`--methods`.
+The XGBoost, Weighted Ensemble, and TabPFN surrogate implementations remain in
+`src/models.py`, but they are hidden experimental code. They are excluded from
+both unified experiment entries and cannot be enabled there with `--methods`.
 
 Run only the main registry's default LHS plan from the repository root:
 
@@ -268,6 +261,5 @@ experiments/results/<method_name>.txt
 - In benchmark experiments, the optimizer should not directly use the true oracle during optimization; the oracle is reserved for offline data generation and final evaluation.
 - Molecule requires the optional scientific-design dependencies bundled by the
   upstream offline-moo project.
-- XGBoost, Weighted Ensemble L2, and TabPFN are disabled by default but remain
-  explicitly selectable. Optional TabPFN credentials are read from environment
-  variables.
+- XGBoost, Weighted Ensemble L2, and TabPFN are intentionally excluded from
+  both unified experiment entries.

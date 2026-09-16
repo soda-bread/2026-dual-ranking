@@ -1,7 +1,7 @@
 # Off-MOO DL and MOBO baselines
 
-These methods can be run together with every other repository method through
-`.venv/bin/python experiments/run_all_methods.py`. This directory's `run.py`
+These methods belong only to the ten-baseline entry
+`.venv/bin/python experiments/run_baselines.py`. This directory's `run.py`
 remains the direct entry point for DL/MOBO-only runs.
 
 This directory adapts four methods from
@@ -111,6 +111,20 @@ Run all four methods for one paired subset:
   --offline-seeds 1 \
   --optimization-seeds 1
 ```
+
+Run independent model/data groups on up to 72 CPU workers:
+
+```bash
+.venv/bin/python experiments/DL_MOBO_baseline/run.py \
+  --resume \
+  --device cpu \
+  --max-workers 72
+```
+
+One worker owns a complete `(method, problem, N, offline_seed)` group and
+reuses its fitted model for all requested optimization seeds. Result rows are
+returned to and written by the parent process. The effective worker count is
+capped by the number of groups.
 
 Successful runs are skipped by default. Use `--no-resume` to run them again.
 The summary is appended to `results/dl_baselines.csv`; raw candidates and their

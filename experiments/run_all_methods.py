@@ -34,7 +34,10 @@ from experiments.method_registry import (  # noqa: E402
 )
 
 
-MAIN_METHODS = tuple(METHOD_REGISTRY)
+HIDDEN_METHODS = tuple(DEFAULT_DISABLED_METHODS)
+MAIN_METHODS = tuple(
+    method for method in METHOD_REGISTRY if method not in HIDDEN_METHODS
+)
 METHOD_GROUPS = {
     "main": MAIN_METHODS,
     "dl_mobo": tuple(DL_MOBO_METHODS),
@@ -43,9 +46,7 @@ METHOD_GROUPS = {
 ALL_METHODS = tuple(
     method for methods in METHOD_GROUPS.values() for method in methods
 )
-DEFAULT_METHODS = tuple(
-    method for method in ALL_METHODS if method not in DEFAULT_DISABLED_METHODS
-)
+DEFAULT_METHODS = ALL_METHODS
 PRIMARY_EXPERIMENT_METHODS = tuple(
     method
     for method in MAIN_METHODS
@@ -119,8 +120,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--methods",
         help=(
-            "comma-separated method names; the default selects the 18 active "
-            "methods (all 21 remain explicitly selectable)"
+            "comma-separated methods from exactly one experiment group; prefer "
+            "run_primary_methods.py or run_baselines.py"
         ),
     )
     parser.add_argument("--list-methods", action="store_true")
@@ -180,9 +181,6 @@ def parse_args(argv=None):
     )
     parser.add_argument("--output-size", type=int, help="generative output size")
     parser.add_argument("--max-workers", type=int, help="main-runner worker count")
-    parser.add_argument(
-        "--tabpfn-max-workers", type=int, help="main-runner TabPFN worker cap"
-    )
     parser.add_argument("--retry-failed", action="store_true")
     parser.add_argument(
         "--smoke",
@@ -195,13 +193,28 @@ def parse_args(argv=None):
     )
     args = parser.parse_args(argv)
 
-    requested = _csv(args.methods) or list(DEFAULT_METHODS)
+    requested = _csv(args.methods)
+    if requested is None and not args.list_methods:
+        parser.error(
+            "no combined default run is available; use run_primary_methods.py "
+            "or run_baselines.py"
+        )
+    requested = requested or []
     args.methods = list(dict.fromkeys(requested))
     unknown = sorted(set(args.methods) - set(ALL_METHODS))
     if unknown:
         parser.error(f"unknown methods: {unknown}")
     if not args.methods and not args.list_methods:
         parser.error("at least one method is required")
+
+    selected = set(args.methods)
+    uses_primary = bool(selected.intersection(PRIMARY_EXPERIMENT_METHODS))
+    uses_baselines = bool(selected.intersection(BASELINE_EXPERIMENT_METHODS))
+    if uses_primary and uses_baselines:
+        parser.error(
+            "primary methods and baselines must run separately; use "
+            "run_primary_methods.py and run_baselines.py"
+        )
 
     selected_non_main = set(args.methods) & set(
         DL_MOBO_METHODS + GENERATIVE_METHODS
@@ -275,7 +288,6 @@ def build_commands(args):
         _append_option(command, "--n-gen", args.n_gen)
         _append_option(command, "--pop-size", args.pop_size)
         _append_option(command, "--max-workers", args.max_workers)
-        _append_option(command, "--tabpfn-max-workers", args.tabpfn_max_workers)
         if args.retry_failed:
             command.append("--retry-failed")
         if args.dry_run:
@@ -305,6 +317,7 @@ def build_commands(args):
         _append_option(command, "--n-gen", args.n_gen)
         _append_option(command, "--pop-size", args.pop_size)
         _append_option(command, "--epochs", args.epochs)
+        _append_option(command, "--max-workers", args.max_workers)
         if args.dry_run:
             command.append("--dry-run")
         commands.append(("dl_mobo", command))
@@ -331,6 +344,7 @@ def build_commands(args):
         _append_option(command, "--optimization-seeds", args.optimization_seeds)
         _append_option(command, "--output-size", args.output_size)
         _append_option(command, "--proxy-epochs", args.proxy_epochs)
+        _append_option(command, "--max-workers", args.max_workers)
         if args.smoke:
             command.append("--smoke")
         if args.dry_run:
@@ -343,11 +357,13 @@ def build_commands(args):
 def main(argv=None):
     args = parse_args(argv)
     if args.list_methods:
-        for group, methods in METHOD_GROUPS.items():
+        for group, methods in (
+            ("primary methods", PRIMARY_EXPERIMENT_METHODS),
+            ("baselines", BASELINE_EXPERIMENT_METHODS),
+        ):
             print(f"{group} ({len(methods)}):")
             for method in methods:
-                suffix = " [disabled by default]" if method in DEFAULT_DISABLED_METHODS else ""
-                print(f"  {method}{suffix}")
+                print(f"  {method}")
         return 0
 
     if args.check_environment:

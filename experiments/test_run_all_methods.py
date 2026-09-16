@@ -8,20 +8,22 @@ from experiments.project_environment import PROJECT_PYTHON
 
 
 class UnifiedDispatcherTest(unittest.TestCase):
-    def test_registry_contains_all_21_unique_methods(self):
-        self.assertEqual(len(run_all_methods.ALL_METHODS), 21)
-        self.assertEqual(len(set(run_all_methods.ALL_METHODS)), 21)
+    def test_unified_registry_contains_only_the_18_experiment_methods(self):
+        self.assertEqual(len(run_all_methods.ALL_METHODS), 18)
+        self.assertEqual(len(set(run_all_methods.ALL_METHODS)), 18)
         self.assertEqual(
             {key: len(value) for key, value in run_all_methods.METHOD_GROUPS.items()},
-            {"main": 15, "dl_mobo": 4, "generative": 2},
+            {"main": 12, "dl_mobo": 4, "generative": 2},
+        )
+        self.assertTrue(
+            set(run_all_methods.ALL_METHODS).isdisjoint(
+                run_all_methods.HIDDEN_METHODS
+            )
         )
 
-    def test_default_plan_excludes_three_temporarily_disabled_methods(self):
-        args = run_all_methods.parse_args(["--dry-run"])
-        self.assertEqual(len(args.methods), 18)
-        self.assertTrue(
-            set(args.methods).isdisjoint(run_all_methods.DEFAULT_DISABLED_METHODS)
-        )
+    def test_combined_default_run_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            run_all_methods.parse_args(["--dry-run"])
 
     def test_two_experiment_groups_partition_the_18_active_methods(self):
         primary = set(run_all_methods.PRIMARY_EXPERIMENT_METHODS)
@@ -61,11 +63,21 @@ class UnifiedDispatcherTest(unittest.TestCase):
                 ["--methods", "DDMOEA-GAN"],
             )
 
-    def test_disabled_method_can_still_be_selected_explicitly(self):
-        args = run_all_methods.parse_args(
-            ["--methods", "XGBoost + NSGA-II", "--dry-run"]
-        )
-        self.assertEqual(args.methods, ["XGBoost + NSGA-II"])
+    def test_hidden_method_is_not_selectable_from_unified_entries(self):
+        with self.assertRaises(SystemExit):
+            run_all_methods.parse_args(
+                ["--methods", "XGBoost + NSGA-II", "--dry-run"]
+            )
+
+    def test_primary_and_baseline_methods_cannot_be_mixed(self):
+        with self.assertRaises(SystemExit):
+            run_all_methods.parse_args(
+                [
+                    "--methods",
+                    "GPR-RBF + NSGA-II,DDMOEA-GAN",
+                    "--dry-run",
+                ]
+            )
 
     def test_mixed_selection_routes_to_each_existing_runner(self):
         args = run_all_methods.parse_args(
@@ -80,6 +92,8 @@ class UnifiedDispatcherTest(unittest.TestCase):
                 "1",
                 "--optimization-seeds",
                 "2",
+                "--max-workers",
+                "7",
                 "--dry-run",
             ]
         )
@@ -91,6 +105,9 @@ class UnifiedDispatcherTest(unittest.TestCase):
         self.assertIn("--dry-run", commands["main"])
         self.assertIn("--dry-run", commands["dl_mobo"])
         self.assertIn("--dry-run", commands["generative"])
+        for command in commands.values():
+            self.assertIn("--max-workers", command)
+            self.assertIn("7", command)
 
     def test_real_commands_use_only_the_repository_venv(self):
         args = run_all_methods.parse_args(

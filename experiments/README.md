@@ -8,28 +8,22 @@ The vendored baseline tree tracks only the Python packages required by
 Prob-RVEA, Prob-MOEA/D, and TGPR-MO. Upstream plots, generated results, sample
 archives, documentation builds, and caches remain excluded from Git.
 
-Run the complete configured experiment plan from the repository root:
-
-```bash
-python3 experiments/run_all_methods.py --dry-run
-.venv/bin/python experiments/run_all_methods.py --check-environment
-.venv/bin/python experiments/run_all_methods.py --resume
-```
-
-Run the two paper experiment groups independently with:
+Run the two configured experiment groups separately from the repository root:
 
 ```bash
 # Eight GPR/QR/BNN methods, including the four DR variants.
+.venv/bin/python experiments/run_primary_methods.py --dry-run
 .venv/bin/python experiments/run_primary_methods.py --resume
 
 # Ten baselines: four classical main-registry baselines, four Off-MOO DL/MOBO
 # baselines, PCD, and ParetoFlow.
+.venv/bin/python experiments/run_baselines.py --dry-run
 .venv/bin/python experiments/run_baselines.py --resume
 ```
 
 Both entries accept the same problem, sample-size, seed, output, resume, and
-dry-run options as `run_all_methods.py`. An explicit `--methods` selection must
-remain inside that entry's method group. Their default output directories are
+dry-run options. An explicit `--methods` selection must remain inside that
+entry's method group. Their default output directories are
 `results_primary_methods` and `results_baselines`, while the subset cache stays
 shared.
 
@@ -37,15 +31,11 @@ Create `.venv` with `python3.11 scripts/setup_environment.py`. The dispatcher
 uses only that repository-local interpreter for real runs; it never inherits a
 virtual environment belonging to a sibling project.
 
-`run_all_methods.py` is the top-level dispatcher for all 21 supported methods.
-Its default plan runs 18 methods and temporarily skips XGBoost, Weighted
-Ensemble L2, and TabPFN. It routes the 15 main-registry methods, four Off-MOO
-DL/MOBO baselines, and two generative baselines to their existing runners. All three
-runners share the requested problem, sample-size, seed, output-directory,
-subset-cache, and resume options. Use
-`python3 experiments/run_all_methods.py --list-methods` to inspect the complete
-registry; any skipped method remains available through an explicit `--methods`
-selection.
+`run_all_methods.py` is an internal dispatcher for these two fixed entries. It
+exposes only the 18 experiment methods and rejects mixed primary/baseline runs.
+XGBoost, Weighted Ensemble L2, and TabPFN remain in the low-level model
+registry but are intentionally absent from the unified entries and cannot be
+selected through them.
 
 The executable `Exp*.py` files were generated from their matching notebooks.
 
@@ -69,8 +59,7 @@ runs use `N=100` for every problem. Edit it to change problem lists, seeds,
 population size, or sample sizes.
 
 Standalone Exp11-Exp13 scripts have been removed. Their XGBoost, Weighted
-Ensemble, and TabPFN surrogate implementations remain registered in
-`sample_size_common.py` for the training-size sensitivity experiment.
+Ensemble, and TabPFN implementations remain only as hidden low-level code.
 
 The configured paper suite is ZDT1/2/3/4/6, OmniTest, VLMOP1-3, DTLZ1-7,
 RE21-25, RE31-37, MO-Portfolio, and Molecule. Both two- and three-objective
@@ -94,20 +83,22 @@ The default design is:
 - training sizes: `50, 100, 200, 400, 1000`;
 - offline-data/LHS seeds: `1..10`;
 - optimization seeds: `1..10`.
-- XGBoost, Weighted Ensemble L2, and TabPFN are disabled in the default plan;
-  their implementations remain available through an explicit `--methods` run.
+- XGBoost, Weighted Ensemble L2, and TabPFN are excluded from both unified
+  experiment entries.
 
 ```bash
-python3 experiments/run_all_methods.py --dry-run
-.venv/bin/python experiments/run_all_methods.py --resume --max-workers 1
-.venv/bin/python experiments/run_all_methods.py --resume --max-workers 72
+.venv/bin/python experiments/run_primary_methods.py --resume --max-workers 72
+.venv/bin/python experiments/run_baselines.py --resume --max-workers 72
 .venv/bin/python experiments/sample_size_summary.py
 ```
 
 Methods run as complete stages in the configured/CLI method order.
-`tabpfn_max_workers: 5` independently caps the TabPFN stage. With
-`--max-workers 72`, every non-TabPFN method stage can use up to 72 workers;
-when execution reaches TabPFN, that stage uses at most 5 workers.
+With `--max-workers 72`, every method stage can use up to 72 workers. The same
+value is forwarded to the DL/MOBO and generative
+runners. Their independent `(method, problem, N, offline_seed)` groups use
+spawned worker processes, while the optimization seeds inside one fitted-model
+group remain sequential so they continue to reuse the same trained model.
+The effective process count is capped by the number of pending groups.
 
 Raw and summary CSV files are written under `results/csv/`.
 Paired dataset archives are stored under `results/npz/`. Surrogate models are
@@ -131,12 +122,6 @@ Use `--retry-failed` to retry failed keys; successful keys are always skipped on
 Top-level Prob-RVEA and Prob-MOEA/D errors are isolated to their method group:
 failed rows, including the traceback, are written to the corresponding problem
 CSV and the worker continues with the next method.
-TabPFN reads `TABPFN_PRIMARY_API_KEY` and optional fallback credentials from
-environment variables. If the primary credential returns a quota/rate-limit/
-HTTP-429 error during fitting or any optimization prediction, the worker
-switches once and retries without logging either token. Never store live keys
-in a YAML configuration file.
-
 HV and IGD+ share the same min-max transform derived only from the offline
 training objectives. HV uses the Xue et al. raw reference point after that
 transform. IGD+ uses a true/reference front when supplied by the problem and

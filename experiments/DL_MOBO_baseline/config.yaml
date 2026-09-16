@@ -41,6 +41,7 @@ dataset_source: official_pool
 training_sizes: [50, 100, 200, 400, 1000]
 offline_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 optimization_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+max_workers: 1
 
 optimizer:
   # Upstream Off-MOO defaults. When N < pop_size, the adapter keeps all

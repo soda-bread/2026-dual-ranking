@@ -1,8 +1,8 @@
 # Generative Offline Multi-Objective Baselines
 
-These methods can be run together with every other repository method through
-`.venv/bin/python experiments/run_all_methods.py`. This directory's `run.py` remains the
-direct entry point for generative-only runs.
+These methods belong only to the ten-baseline entry
+`.venv/bin/python experiments/run_baselines.py`. This directory's `run.py`
+remains the direct entry point for generative-only runs.
 
 This directory contains repository-local adapters for PCD and ParetoFlow.
 Their implementations and runtime do not import from the earlier comparison
@@ -92,6 +92,20 @@ Dependencies are shared with the existing DL/MOBO baselines:
 git submodule update --init external/offline-moo
 python3.11 scripts/setup_environment.py
 ```
+
+Independent `(method, problem, N, offline_seed)` groups can use multiple CPU
+workers while optimization seeds within a group reuse one fitted model:
+
+```bash
+.venv/bin/python experiments/generative_baseline/run.py \
+  --resume \
+  --device cpu \
+  --max-workers 72
+```
+
+The parent process serializes CSV writes, and the effective worker count is
+capped by the number of pending groups. Multi-worker execution is intended for
+CPU runs; using many processes against one GPU can exhaust device memory.
 
 Off-MOO task data must also exist in the expected `data/<task>/` directories.
 Initializing only the code submodule without its data causes full runs to
