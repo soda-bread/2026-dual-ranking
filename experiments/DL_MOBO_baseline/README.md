@@ -119,7 +119,8 @@ Run all four methods for one paired subset:
   --optimization-seeds 1
 ```
 
-Run independent model/data groups on up to 72 CPU workers:
+Run independent model/data groups on up to 72 CPU workers when the allocation
+provides 72 CPU cores:
 
 ```bash
 .venv/bin/python experiments/DL_MOBO_baseline/run.py \
@@ -131,7 +132,10 @@ Run independent model/data groups on up to 72 CPU workers:
 One worker owns a complete `(method, problem, N, offline_seed)` group and
 reuses its fitted model for all requested optimization seeds. Result rows are
 returned to and written by the parent process. The effective worker count is
-capped by the number of groups.
+capped by the number of groups. Every worker is initialized with native BLAS,
+OpenMP, and Torch thread counts set to one, preventing process/thread
+oversubscription. In general, use `allocated CPU cores / threads per worker`;
+the enforced threads-per-worker value here is one.
 
 Successful runs are skipped by default. Use `--no-resume` to run them again.
 The summary is appended to `results/dl_baselines.csv`; raw candidates and their

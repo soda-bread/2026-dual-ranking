@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,36 @@ import pandas as pd
 
 
 METRICS = ("MSEpre", "MSEsur_real", "HVreal", "IGDplus")
+
+
+def _expected_protocol_version(method, dataset_source):
+    """Return the repository's current protocol for a known method."""
+
+    method = str(method)
+    dataset_source = str(dataset_source)
+    from experiments.method_registry import METHOD_REGISTRY
+
+    if method in METHOD_REGISTRY:
+        from experiments.sample_size_common import current_protocol_version
+
+        return current_protocol_version(dataset_source, method)
+
+    from experiments.DL_MOBO_baseline import (
+        BASELINE_NAMES as DL_BASELINES,
+        PROTOCOL_VERSION as DL_PROTOCOL_VERSION,
+    )
+
+    if method in DL_BASELINES:
+        return DL_PROTOCOL_VERSION
+
+    from experiments.generative_baseline import (
+        BASELINE_NAMES as GENERATIVE_BASELINES,
+        PROTOCOL_VERSION as GENERATIVE_PROTOCOL_VERSION,
+    )
+
+    if method in GENERATIVE_BASELINES:
+        return GENERATIVE_PROTOCOL_VERSION
+    return None
 
 
 def bootstrap_ci(values, seed=2026, samples=10_000):
@@ -71,6 +102,60 @@ def summarize(input_dir: Path | list[Path], output_dir: Path, *, write_plots=Tru
             raw["protocol_version"].astype(str).str.strip() == "",
             "protocol_version",
         ] = "unversioned"
+    if "configuration_hash" not in raw.columns:
+        raw["configuration_hash"] = ""
+    else:
+        raw["configuration_hash"] = raw["configuration_hash"].fillna("")
+
+    raw["expected_protocol_version"] = [
+        _expected_protocol_version(method, source)
+        for method, source in zip(raw["method"], raw["dataset_source"])
+    ]
+    protocol_inventory = (
+        raw.assign(
+            result_identity=raw["protocol_version"].astype(str)
+            + raw["configuration_hash"].astype(str).map(
+                lambda value: f"|cfg={value}" if value else ""
+            )
+        )
+        .groupby(["dataset_source", "method"], as_index=False)
+        .agg(
+            protocol_versions=(
+                "protocol_version",
+                lambda values: " | ".join(sorted(set(map(str, values)))),
+            ),
+            result_identities=(
+                "result_identity",
+                lambda values: " | ".join(sorted(set(map(str, values)))),
+            ),
+            identity_count=("result_identity", "nunique"),
+        )
+    )
+    mixed = protocol_inventory[protocol_inventory["identity_count"] > 1]
+    if not mixed.empty:
+        details = ", ".join(
+            f"{row.method} ({row.result_identities})"
+            for row in mixed.itertuples()
+        )
+        warnings.warn(
+            "Multiple protocol/configuration identities were found; stale rows "
+            f"will not be mixed silently: {details}",
+            RuntimeWarning,
+        )
+
+    known_protocol = raw["expected_protocol_version"].notna()
+    stale_protocol = known_protocol & (
+        raw["protocol_version"].astype(str)
+        != raw["expected_protocol_version"].astype(str)
+    )
+    stale = raw[stale_protocol].copy()
+    raw = raw[~stale_protocol].copy()
+    if not stale.empty:
+        warnings.warn(
+            f"Excluded {len(stale)} rows whose protocol_version is not current. "
+            "See stale_protocol_rows.csv.",
+            RuntimeWarning,
+        )
     for column in ("configured_n_gen", "configured_pop_size"):
         if column not in raw.columns:
             raw[column] = 100
@@ -163,6 +248,10 @@ def summarize(input_dir: Path | list[Path], output_dir: Path, *, write_plots=Tru
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_output_dir = output_dir / "csv"
     csv_output_dir.mkdir(parents=True, exist_ok=True)
+    protocol_inventory.to_csv(
+        csv_output_dir / "protocol_inventory.csv", index=False
+    )
+    stale.to_csv(csv_output_dir / "stale_protocol_rows.csv", index=False)
     lhs.to_csv(csv_output_dir / "lhs_level_summary.csv", index=False)
     problem_summary.to_csv(csv_output_dir / "sample_size_summary.csv", index=False)
     value_columns = ["lhs_count", "overall_mean", "std", "median", "q25", "q75",

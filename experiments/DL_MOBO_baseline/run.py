@@ -16,6 +16,13 @@ REPO_ROOT = HERE.parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from experiments.worker_runtime import (  # noqa: E402
+    initialize_worker_threads,
+    set_worker_thread_environment,
+)
+
+set_worker_thread_environment(1)
+
 from experiments.DL_MOBO_baseline.core import (  # noqa: E402
     BASELINE_NAMES,
     PROTOCOL_VERSION,
@@ -135,6 +142,7 @@ def build_plan(args):
 def _execute_group(payload):
     """Run one independent model/data group in a worker process."""
 
+    initialize_worker_threads(1)
     return run_group(**payload)
 
 
@@ -240,6 +248,8 @@ def main(argv=None) -> int:
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=worker_count,
             mp_context=context,
+            initializer=initialize_worker_threads,
+            initargs=(1,),
         ) as executor:
             futures = {
                 executor.submit(_execute_group, payload_for(task)): (index, task)

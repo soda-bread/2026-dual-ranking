@@ -110,7 +110,8 @@ Before a formal run, download each task's official `.npy` pool into
 at least 1,000 training rows; the official released pools satisfy this.
 
 Independent `(method, problem, N, offline_seed)` groups can use multiple CPU
-workers while optimization seeds within a group reuse one fitted model:
+workers while optimization seeds within a group reuse one fitted model. Use 72
+workers only for a job allocation with 72 CPU cores:
 
 ```bash
 .venv/bin/python experiments/generative_baseline/run.py \
@@ -120,8 +121,10 @@ workers while optimization seeds within a group reuse one fitted model:
 ```
 
 The parent process serializes CSV writes, and the effective worker count is
-capped by the number of pending groups. Multi-worker execution is intended for
-CPU runs; using many processes against one GPU can exhaust device memory.
+capped by the number of pending groups. Native BLAS/OpenMP and Torch thread
+pools are capped at one thread inside every worker, so the general worker rule
+is `allocated CPU cores / 1`. Multi-worker execution is intended for CPU runs;
+using many processes against one GPU can exhaust device memory.
 
 Off-MOO task data must also exist in the expected `data/<task>/` directories.
 Initializing only the code submodule without its data causes full runs to

@@ -87,6 +87,7 @@ The default design is:
   experiment entries.
 
 ```bash
+# Use 72 only when the job allocation provides 72 CPU cores.
 .venv/bin/python experiments/run_primary_methods.py --resume --max-workers 72
 .venv/bin/python experiments/run_baselines.py --resume --max-workers 72
 .venv/bin/python experiments/sample_size_summary.py
@@ -97,10 +98,17 @@ default. It merges `exp*_results.csv`, `dl_baselines.csv`, and
 `generative_baselines.csv`, maps `offline_seed` to `lhs_seed` and generative
 `configured_output_size` to the common population-size column, then produces
 one cross-group set of summaries and ranks under `results_summary`.
+Known methods are filtered to their current `protocol_version` before the
+latest row is selected. `protocol_inventory.csv` lists every protocol/config
+identity found, and `stale_protocol_rows.csv` records excluded legacy rows; a
+mixed identity set also emits a runtime warning.
 
 Methods run as complete stages in the configured/CLI method order.
-With `--max-workers 72`, every method stage can use up to 72 workers. The same
-value is forwarded to the DL/MOBO and generative
+With `--max-workers 72`, every method stage can use up to 72 workers only when
+72 CPU cores have been allocated. Each worker is explicitly capped at one
+OpenMP, MKL, OpenBLAS, NumExpr, BLIS, Accelerate, and Torch compute thread, so
+the recommended worker count is `allocated CPU cores / 1`, capped by pending
+groups. The same value is forwarded to the DL/MOBO and generative
 runners. Their independent `(method, problem, N, offline_seed)` groups use
 spawned worker processes, while the optimization seeds inside one fitted-model
 group remain sequential so they continue to reuse the same trained model.

@@ -13,6 +13,17 @@ import itertools
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from experiments.worker_runtime import (  # noqa: E402
+    initialize_worker_threads,
+    set_worker_thread_environment,
+)
+
+# Spawned workers inherit these limits before importing NumPy, BLAS, or Torch.
+set_worker_thread_environment(1)
 
 from sample_size_common import (
     LHS_SEEDS, METHOD_REGISTRY, OPT_SEEDS, PROBLEMS, TRAIN_SIZES, TEST_SIZE,
@@ -262,6 +273,7 @@ def _redirect_process_output(log_path):
 
 
 def _execute(payload):
+    initialize_worker_threads(1)
     (
         output_dir,
         problem,
@@ -430,7 +442,11 @@ def main(argv=None):
                     _release_worker_memory()
             continue
 
-        with ProcessPoolExecutor(max_workers=method_workers) as executor:
+        with ProcessPoolExecutor(
+            max_workers=method_workers,
+            initializer=initialize_worker_threads,
+            initargs=(1,),
+        ) as executor:
             future_labels = {}
             for payload in method_payloads:
                 future = executor.submit(_execute_sequence, (payload,))
