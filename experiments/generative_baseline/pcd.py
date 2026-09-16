@@ -313,16 +313,17 @@ class PCDModel:
 
 def _resolved_config(config, problem_name=None):
     resolved = dict(config)
-    overrides = resolved.pop("re_overrides", {}) or {}
-    if str(problem_name or "").lower().startswith("re"):
-        resolved.update(overrides)
+    re_overrides = resolved.pop("re_overrides", {}) or {}
+    problem_key = str(problem_name or "").strip().lower()
+    if problem_key.startswith("re"):
+        resolved.update(re_overrides)
     return resolved
 
 
 def _ema_decay_at_step(step, update_after_step, beta, power):
     """Match ema-pytorch's inverse-power decay after its copy warmup."""
 
-    epoch = int(step) - int(update_after_step) - 1
+    epoch = int(step) - int(update_after_step)
     return min(
         max(1.0 - (1.0 + epoch) ** (-float(power)), 0.0),
         float(beta),
@@ -460,6 +461,7 @@ def generate_pcd(model, data, config, opt_seed, output_size, task):
         alpha_range=tuple(config["alpha_range"]),
         noise=config["condition_noise"],
         max_base_points=int(config.get("condition_base_points", 32)),
+        reference_direction_seed=int(config.get("reference_direction_seed", 42)),
     )
     candidates = model.generate(
         targets, config["guidance_scale"], conditions_are_scaled=True

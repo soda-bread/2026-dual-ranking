@@ -204,6 +204,13 @@ reference directions and a rebuilt matching neighborhood matrix. With the
 default `n_gen=100` and `pop_size=100`, every method is checked for exactly
 10,000 surrogate evaluations. Raw result rows record both counters. Legacy LHS mode
 retains the original 10,000-FE termination for the DESDEO baselines.
+All pymoo-based primary optimizers and DDMOEA-GAN use polynomial mutation with
+individual probability `1.0`, per-variable probability `1 / n_var`, and
+`eta=20`. This explicit split is required by pymoo 0.6; its `prob` argument is
+the individual-level probability, while `prob_var` is the variable-level
+probability. A method-specific protocol suffix prevents resume from reusing
+rows produced by the earlier, weaker `prob=1 / n_var` interpretation. TGPR-MO,
+Prob-RVEA, and Prob-MOEA/D are unaffected and retain their existing resume keys.
 `protocol_version` is part of every resume/result key, so unversioned results
 and results from the older uncertainty protocol are rerun instead of mixed.
 Configured `n_gen` and `pop_size` are also part of that identity, so CLI budget
@@ -219,6 +226,8 @@ one-hidden-layer architecture and uses a `D`-dimensional noise vector. The
 `ddmoea_gan` section of `config.yaml` exposes the small-data adaptations:
 
 - `poly_ridge: false` restores the paper's second-order ordinary least squares;
+  the enabled RidgeCV variant searches `1e-3` through `1e2`, avoiding an
+  effectively unregularized `1e-6` choice on small underdetermined fits;
 - `rbf_width: paper` restores `sigma=1`, while `mean_distance` estimates the
   width from the fitted centers;
 - `rbf_center_cap: none` restores `D` centers, while `half_train` caps them at
@@ -231,10 +240,12 @@ one-hidden-layer architecture and uses a `D`-dimensional noise vector. The
 The paper's RBFN intercept is fitted explicitly. When an offline subset is
 smaller than the NSGA-II population, repeated initializer rows are retained by
 disabling pymoo duplicate elimination for that run; this preserves the exact
-`population_size * n_gen` surrogate-evaluation budget. Eq. (10) is evaluated
-in fit-subset min-max normalized objective space and mapped back to the original
-scale, which is a sign-safe adaptation for objectives containing negative
-values rather than a literal raw-objective application.
+`population_size * n_gen` surrogate-evaluation budget. For Eq. (10), the
+affine origin is placed one observed objective span below the observed minimum.
+Applying the confidence multiplier in that positive coordinate system keeps
+higher confidence as a reward when objective minima are nonzero or negative,
+including predictions below a positive observed minimum that remain above the
+lower affine origin.
 
 Run the appendix diagnostic with the paper's full epoch counts:
 

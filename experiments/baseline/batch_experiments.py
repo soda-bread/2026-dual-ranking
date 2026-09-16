@@ -20,15 +20,19 @@ import pandas as pd
 import yaml
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.operators.crossover.sbx import SBX
-from pymoo.operators.mutation.pm import PM
 from pymoo.operators.sampling.lhs import LHS
 from pymoo.optimize import minimize
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from pymoo.util.ref_dirs import get_reference_directions
 from sklearn.metrics import mean_squared_error
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.evolution import polynomial_mutation  # noqa: E402
+
+
 BASELINE_ROOT = REPO_ROOT / "experiments" / "baseline"
 PROB_VENDOR_ROOT = BASELINE_ROOT / "Prob-RVEA and Prob-MOEA-D 2022"
 TGPR_VENDOR_ROOT = BASELINE_ROOT / "TGPR-MO 2023"
@@ -1566,7 +1570,7 @@ def _run_ddmoea_gan_problem(problem_name, benchmark_problem, config, seeds):
                 pop_size=population_size,
                 sampling=seed_initial_population.copy(),
                 crossover=SBX(prob=1.0, eta=20),
-                mutation=PM(prob=1.0 / benchmark_problem.n_var, eta=20),
+                mutation=polynomial_mutation(benchmark_problem.n_var, eta=20),
                 eliminate_duplicates=not repeated_initial_rows,
             )
             if ddmoea_repair is not None:

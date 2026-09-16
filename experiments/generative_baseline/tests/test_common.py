@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -40,6 +41,34 @@ class CommonTest(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(conditions)))
         np.testing.assert_allclose(conditions, repeated)
         self.assertTrue(np.any(conditions < values.min(axis=0)))
+
+    def test_conditions_use_32_bases_then_truncate_to_requested_count(self):
+        rng = np.random.default_rng(11)
+        values = rng.normal(size=(80, 3))
+        from experiments.generative_baseline import common
+
+        with patch.object(
+            common,
+            "reference_directions",
+            wraps=common.reference_directions,
+        ) as directions:
+            conditions = condition_points(values, 100, seed=7, noise=0.0)
+        self.assertEqual(conditions.shape, (100, 3))
+        self.assertEqual(directions.call_args.args[1], 32)
+        self.assertEqual(directions.call_args.args[2], 42)
+
+    def test_reference_direction_seed_is_independent_of_sampling_seed(self):
+        rng = np.random.default_rng(12)
+        values = rng.normal(size=(40, 2))
+        explicit = condition_points(
+            values,
+            100,
+            seed=3,
+            noise=0.0,
+            reference_direction_seed=42,
+        )
+        default = condition_points(values, 100, seed=3, noise=0.0)
+        np.testing.assert_allclose(explicit, default)
 
     def test_pcd_reweighting_uses_dominance_count_without_mean_normalization(self):
         values = np.array([[0.0, 1.0], [1.0, 0.0], [1.2, 1.2], [1.4, 1.4]])

@@ -13,6 +13,7 @@ from experiments.baseline.ddmoea_gan import (
     Generator,
     RBFN,
     build_poly_models,
+    confidence_adjusted_fitness,
     construct_surrogate_pool_with_gan,
     discriminator_confidence_score,
     initial_population_has_repeated_rows,
@@ -55,7 +56,31 @@ class SurrogateSwitchTests(unittest.TestCase):
         _, ridge_regs = build_poly_models(x, y, *bounds, ridge=True)
         self.assertTrue(all(isinstance(model, LinearRegression) for model in paper_regs))
         self.assertTrue(all(isinstance(model, RidgeCV) for model in ridge_regs))
-        self.assertTrue(all(model.alpha_ > 0.0 for model in ridge_regs))
+        self.assertTrue(all(model.alpha_ >= 1e-3 for model in ridge_regs))
+
+    def test_critical_fitness_rewards_confidence_with_nonzero_minimum(self):
+        prediction = np.array([[0.2], [0.8]])
+        confidence = np.ones_like(prediction)
+        adjusted = confidence_adjusted_fitness(
+            prediction,
+            confidence,
+            f_min=np.array([0.5]),
+            f_max=np.array([1.5]),
+            alpha_critic=0.1,
+        )
+        self.assertTrue(np.all(adjusted < prediction))
+        np.testing.assert_allclose(adjusted[:, 0], [0.13, 0.67])
+
+    def test_critical_fitness_rewards_confidence_for_negative_objectives(self):
+        prediction = np.array([[-2.0]])
+        adjusted = confidence_adjusted_fitness(
+            prediction,
+            confidence=np.array([[1.0]]),
+            f_min=np.array([-3.0]),
+            f_max=np.array([1.0]),
+            alpha_critic=0.1,
+        )
+        self.assertLess(float(adjusted[0, 0]), float(prediction[0, 0]))
 
     def test_mean_distance_width_and_center_cap(self):
         rng = np.random.default_rng(4)

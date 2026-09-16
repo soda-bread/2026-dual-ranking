@@ -62,12 +62,18 @@ no-validation proxy behavior.
 PCD follows the official dominance-count weighting, fixed 30-bin density
 weighting, residual MLP denoiser, EMA sampling weights, cosine learning-rate
 schedule, AdamW parameter groups, and reference-direction conditioning in
-z-score objective space. EMA uses the official 100-step copy warmup, 10-step
-update interval, and inverse-power decay capped at 0.995. Its D-best source is
+z-score objective space. It uses up to 32 energy reference directions with the
+upstream fixed seed 42; for 100 outputs, the associated base points are tiled
+with ceiling division and truncated rather than reducing the direction count
+to 25. EMA uses the official 100-step copy warmup, 10-step update interval,
+and inverse-power decay capped at 0.995. Its D-best source is
 the leading 256 solutions (or the complete set when smaller) selected from the
 official-pool subset by non-dominated rank and crowding. Synthetic tasks use
 the published synthetic configuration; RE21--RE37 use the wider four-block
-network and RE-specific training and churn values from `config/re.gin`. The
+network and RE-specific training and churn values from `config/re.gin`.
+`molecule` and `mo-portfolio` intentionally retain the synthetic configuration;
+the former does not use upstream `scientific.gin` in this comparison, and the
+latter is outside the original PCD task suite. The
 official 80/20 split is not used because validation is logging-only and would
 unnecessarily reduce these small training subsets.
 
@@ -85,9 +91,10 @@ space. Protocol v2 invalidates results produced by the earlier simplified
 ParetoFlow and PCD adapters, so those rows must be rerun.
 
 ParetoFlow rows created under the earlier epoch/CFM-early-stopping protocol are
-invalidated automatically by the configuration hash. PCD's configuration hash
-and existing result rows are unchanged; the shared protocol version is
-intentionally not increased.
+invalidated automatically by the configuration hash. The fixed PCD reference
+direction seed likewise changes PCD's configuration hash, so older PCD rows are
+not resumed. The shared protocol version is intentionally not increased
+because invalidation is method-specific.
 
 ## Running the Baselines
 

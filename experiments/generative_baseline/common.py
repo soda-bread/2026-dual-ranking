@@ -231,11 +231,6 @@ def _perpendicular_distances(points, directions):
     return np.linalg.norm(points[:, None, :] - closest, axis=2)
 
 
-def _largest_divisor_at_most(value, limit):
-    value, limit = int(value), min(int(limit), int(value))
-    return max(candidate for candidate in range(1, limit + 1) if value % candidate == 0)
-
-
 def condition_points(
     y_scaled,
     count,
@@ -243,6 +238,7 @@ def condition_points(
     alpha_range=(0.1, 0.4),
     noise=0.05,
     max_base_points=32,
+    reference_direction_seed=42,
 ):
     """Official PCD reference-direction extrapolation in z-score space."""
 
@@ -253,8 +249,12 @@ def condition_points(
     if count < 1:
         raise ValueError("count must be positive.")
     rng = np.random.default_rng(int(seed))
-    k = _largest_divisor_at_most(count, min(max_base_points, len(y_scaled)))
-    directions = reference_directions(y_scaled.shape[1], k, seed)
+    # Upstream PCD uses at most 32 base/reference directions.  The requested
+    # output size need not be divisible by k: tile with ceil and truncate.
+    k = min(int(max_base_points), len(y_scaled), count)
+    directions = reference_directions(
+        y_scaled.shape[1], k, int(reference_direction_seed)
+    )
     distances = _perpendicular_distances(y_scaled, directions)
     niches = np.argmin(distances, axis=1)
     niche_distances = distances[np.arange(len(y_scaled)), niches]
@@ -291,9 +291,9 @@ def condition_points(
         selected = np.append(selected, rng.choice(remaining, k - len(selected), replace=False))
 
     point_directions = directions[niches[selected]]
-    tiling_factor = count // k
-    base = np.tile(y_scaled[selected], (tiling_factor, 1))
-    tiled_directions = np.tile(point_directions, (tiling_factor, 1))
+    tiling_factor = int(np.ceil(count / k))
+    base = np.tile(y_scaled[selected], (tiling_factor, 1))[:count]
+    tiled_directions = np.tile(point_directions, (tiling_factor, 1))[:count]
     alpha = rng.uniform(*alpha_range, size=(count, 1))
     targets = base - alpha * tiled_directions
     if abs(float(noise)) >= 1e-10:

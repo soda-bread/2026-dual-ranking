@@ -52,14 +52,28 @@ OPT_SEEDS = tuple(range(1, 11))
 TEST_SIZE = 100
 LHS_PROTOCOL_VERSION = "lhs_full_offline_native_quantile_v6"
 OFFICIAL_PROTOCOL_VERSION = "official_pool_full_offline_native_quantile_v10"
+PYMOO_MUTATION_PROTOCOL_VERSION = "pm_individual1_variable1overd_v1"
 
 
-def current_protocol_version(dataset_source):
-    return (
+def current_protocol_version(dataset_source, method=None):
+    version = (
         OFFICIAL_PROTOCOL_VERSION
         if str(dataset_source).strip().lower() == "official_pool"
         else LHS_PROTOCOL_VERSION
     )
+    if method is not None:
+        spec = METHOD_REGISTRY.get(str(method))
+        if spec is not None and (
+            spec.family not in BASELINE_FAMILIES or spec.family == "ddmoea_gan"
+        ):
+            version = f"{version}+{PYMOO_MUTATION_PROTOCOL_VERSION}"
+        if spec is not None and spec.family == "ddmoea_gan":
+            method_configuration = dict(_root_config.get("ddmoea_gan") or {})
+            configuration_hash = hashlib.sha256(
+                json.dumps(method_configuration, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            version = f"{version}+cfg-{configuration_hash[:12]}"
+    return version
 
 
 def result_protocol_version(row):
@@ -387,14 +401,14 @@ def _base_row(
 ):
     data = {} if data is None else data
     dataset_source = str(_dataset_scalar(data, "dataset_source", dataset_source))
-    protocol_version = current_protocol_version(dataset_source)
+    protocol_version = current_protocol_version(dataset_source, method)
     test_size = int(_dataset_scalar(data, "test_size", TEST_SIZE))
     fit_size = int(_dataset_scalar(data, "fit_size", training_size))
     offline_sample_size = int(
         _dataset_scalar(data, "offline_sample_size", training_size)
     )
     method_configuration_hash = str(method_configuration_hash or "")
-    if method_configuration_hash:
+    if method_configuration_hash and "+cfg-" not in protocol_version:
         protocol_version = f"{protocol_version}+cfg-{method_configuration_hash[:12]}"
     return {
         "problem": problem, "method": method, "dataset_source": dataset_source,

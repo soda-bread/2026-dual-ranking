@@ -87,6 +87,7 @@ pcd:
   density_k: 10.0
   tau: 0.05
   condition_base_points: 32
+  reference_direction_seed: 42
   alpha_range: [0.1, 0.4]
   condition_noise: 0.05
   # The official implementation uses a separate configuration for RE tasks.

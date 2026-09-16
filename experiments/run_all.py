@@ -200,7 +200,7 @@ def build_plan(args):
         for opt_seed in args.opt_seeds:
             key = _key(
                 args.dataset_source,
-                current_protocol_version(args.dataset_source),
+                current_protocol_version(args.dataset_source, method),
                 args.n_gen,
                 args.pop_size,
                 problem,

@@ -131,11 +131,12 @@ class ModelSmokeTest(unittest.TestCase):
 
     def test_pcd_official_ema_decay_schedule(self):
         self.assertAlmostEqual(
-            _ema_decay_at_step(101, 100, 0.995, 2.0 / 3.0), 0.0
+            _ema_decay_at_step(101, 100, 0.995, 2.0 / 3.0),
+            1.0 - 2.0 ** (-2.0 / 3.0),
         )
         self.assertAlmostEqual(
             _ema_decay_at_step(110, 100, 0.995, 2.0 / 3.0),
-            1.0 - 10.0 ** (-2.0 / 3.0),
+            1.0 - 11.0 ** (-2.0 / 3.0),
         )
         self.assertEqual(
             _ema_decay_at_step(100_000, 100, 0.995, 2.0 / 3.0), 0.995

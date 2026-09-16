@@ -302,7 +302,7 @@ def build_poly_models(X, F, x_min, x_max, degree=2, ridge=False):
         poly = PolynomialFeatures(degree=degree, include_bias=True)
         x_poly = poly.fit_transform(X_scaled)
         reg = (
-            RidgeCV(alphas=np.logspace(-6, 2, 17))
+            RidgeCV(alphas=np.logspace(-3, 2, 17))
             if ridge
             else LinearRegression()
         )
@@ -541,14 +541,42 @@ def critical_fitness(
         score_norm=score_norm,
         score_reference=score_reference,
     )
-    # Work in a fit-subset-relative objective space before applying the critic.
-    # Multiplying raw objectives reverses the intended preference whenever an
-    # objective is negative: a high-confidence negative prediction becomes
-    # numerically worse for minimization.  The normalized form is sign-safe.
+    return confidence_adjusted_fitness(
+        y_mean,
+        confidence,
+        f_min,
+        f_max,
+        alpha_critic=alpha_critic,
+    )
+
+
+def confidence_adjusted_fitness(
+    y_mean,
+    confidence,
+    f_min,
+    f_max,
+    alpha_critic=0.1,
+):
+    """Apply Eq. (10) in a positive, fit-subset-relative coordinate system.
+
+    The affine origin is one observed objective span below the observed
+    minimum.  Thus predictions inside the observed range have positive
+    coordinates and increasing discriminator confidence always improves their
+    minimization fitness, including when the observed minimum is nonzero or
+    negative.
+    """
+
+    y_mean = np.asarray(y_mean, dtype=float)
+    confidence = np.asarray(confidence, dtype=float)
+    f_min = np.asarray(f_min, dtype=float)
+    f_max = np.asarray(f_max, dtype=float)
     objective_span = f_max - f_min + 1e-12
-    y_unit = (y_mean - f_min) / objective_span
-    critical_unit = y_unit * (1.0 - alpha_critic * confidence)
-    return f_min + critical_unit * objective_span
+    affine_origin = f_min - objective_span
+    positive_coordinate = (y_mean - affine_origin) / objective_span
+    critical_coordinate = positive_coordinate * (
+        1.0 - float(alpha_critic) * confidence
+    )
+    return affine_origin + critical_coordinate * objective_span
 
 
 class DDMOEAGANProblem(Problem):

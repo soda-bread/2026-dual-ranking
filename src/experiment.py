@@ -9,7 +9,6 @@ from pymoo.algorithms.moo.sms import SMSEMOA
 from pymoo.constraints.as_penalty import ConstraintsAsPenalty
 from pymoo.core.individual import calc_cv
 from pymoo.operators.crossover.sbx import SBX
-from pymoo.operators.mutation.pm import PM
 from pymoo.optimize import minimize
 from pymoo.termination import get_termination
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
@@ -23,6 +22,7 @@ from src.offline_moo_adapter import (
     repair_offline_moo_decisions,
 )
 from src.metrics import normalize_objectives
+from src.evolution import polynomial_mutation
 
 
 class BroadcastConstraintsAsPenalty(ConstraintsAsPenalty):
@@ -122,7 +122,7 @@ def build_optimization_algorithm(
     )
     optimizer_key = _normalize_optimizer_name(optimizer_name)
     crossover = SBX(prob=1.0, eta=20)
-    mutation = PM(prob=1 / problem.n_var, eta=20)
+    mutation = polynomial_mutation(problem.n_var, eta=20)
     repair = get_offline_moo_repair(problem)
     sampling_kwargs = (
         {}
