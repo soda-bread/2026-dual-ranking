@@ -1,10 +1,31 @@
 import contextlib
 import io
+import re
 import sys
 import warnings
 from pathlib import Path
 
 import numpy as np
+
+
+OFFLINE_MOO_OPTIONAL_MODULES = (
+    "EvoXBench",
+    "MuJoCo",
+    "LAMBO",
+    "Molecule",
+    "BBOPlacement",
+)
+
+
+def suppress_offline_moo_optional_warnings():
+    """Hide only warnings for optional task families outside this project."""
+
+    names = "|".join(re.escape(name) for name in OFFLINE_MOO_OPTIONAL_MODULES)
+    warnings.filterwarnings(
+        "ignore",
+        message=rf"Failed to config (?:{names}) module\..*",
+        category=UserWarning,
+    )
 
 
 OFFLINE_MOO_PROBLEM_NAMES = {
@@ -66,6 +87,7 @@ def offline_moo_root():
 
 
 def ensure_offline_moo_on_path():
+    suppress_offline_moo_optional_warnings()
     root = str(offline_moo_root())
     if root not in sys.path:
         sys.path.insert(0, root)

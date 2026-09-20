@@ -259,7 +259,8 @@ experiments/results/<method_name>.txt
 - RE problems are real-world engineering design benchmarks with explicit
   analytical oracles.
 - In benchmark experiments, the optimizer should not directly use the true oracle during optimization; the oracle is reserved for offline data generation and final evaluation.
-- Molecule requires the optional scientific-design dependencies bundled by the
-  upstream offline-moo project.
+- Molecule uses the scientific-design code and assets bundled by the upstream
+  offline-moo project. Its RDKit and Chemprop runtime dependencies are pinned
+  in this repository's `requirements.txt` and checked before real runs.
 - XGBoost, Weighted Ensemble L2, and TabPFN are intentionally excluded from
   both unified experiment entries.

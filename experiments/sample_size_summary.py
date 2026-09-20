@@ -271,7 +271,14 @@ def summarize(input_dir: Path | list[Path], output_dir: Path, *, write_plots=Tru
     failed.to_csv(csv_output_dir / "failed_runs.csv", index=False)
 
     if write_plots and not average_ranks.empty:
+        import matplotlib
+
+        # Some legacy TGPR-MO modules enable TeX rendering globally.  Summary
+        # plots must remain batch-safe on compute nodes without a TeX install.
+        matplotlib.use("Agg", force=True)
+        matplotlib.rcParams["text.usetex"] = False
         import matplotlib.pyplot as plt
+
         for (source, n_gen, pop_size, metric), source_metric in average_ranks.groupby(
             [
                 "dataset_source", "configured_n_gen", "configured_pop_size",

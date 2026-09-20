@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -13,6 +14,7 @@ from experiments.worker_runtime import (
     THREAD_ENVIRONMENT_VARIABLES,
     initialize_worker_threads,
     set_worker_thread_environment,
+    suppress_known_optional_dependency_warnings,
 )
 
 
@@ -54,6 +56,20 @@ class WorkerRuntimeTests(unittest.TestCase):
                 source = path.read_text(encoding="utf-8")
                 self.assertIn("initializer=initialize_worker_threads", source)
                 self.assertIn("initargs=(1,)", source)
+
+    def test_only_known_offline_moo_optional_warnings_are_suppressed(self):
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            suppress_known_optional_dependency_warnings()
+            warnings.warn(
+                "Failed to config LAMBO module. It might fail when you are "
+                "running with Sci-Design tasks.",
+                UserWarning,
+            )
+            warnings.warn("A real experiment warning", UserWarning)
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(str(captured[0].message), "A real experiment warning")
 
 
 if __name__ == "__main__":

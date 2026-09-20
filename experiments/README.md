@@ -27,6 +27,11 @@ entry's method group. Their default output directories are
 `results_primary_methods` and `results_baselines`, while the subset cache stays
 shared.
 
+All three underlying runners use the same TGPR-MO-style server progress line:
+`[progress] completed/total (...) | success=... | failed=... | total_success=... | total_failed=... | skipped=... | problem | N=... | offline_seed=... | method`.
+Verbose Python and native-library output from each fitted-model group is kept
+under `<output-dir>/logs/` instead of being interleaved in the server terminal.
+
 Create `.venv` with `python3.11 scripts/setup_environment.py`. The dispatcher
 uses only that repository-local interpreter for real runs; it never inherits a
 virtual environment belonging to a sibling project.
@@ -128,11 +133,14 @@ After every complete, error-free main run, the runner automatically regenerates
 all five summary CSV files from the accumulated raw result CSV files.
 At startup, legacy `results/exp*_results.csv` rows missing from the new CSV
 directory are copied into `results/csv/` without duplicating successful runs.
-The resume plan then runs only experiment keys that do not have a successful
-CSV row (or failed rows when `--retry-failed` is requested). Dataset NPZ files
-are reused; models needed by incomplete groups are retrained.
+The resume plan skips only experiment keys that already have a successful CSV
+row. Failed rows are automatically retried by `--resume`, matching the DL/MOBO
+and generative runners. Dataset NPZ files are reused; models needed by
+incomplete groups are retrained.
 A successful unique key is `(problem, method, training_size, lhs_seed, opt_seed)`.
-Use `--retry-failed` to retry failed keys; successful keys are always skipped on resume.
+The legacy `--retry-failed` flag remains accepted for command-line
+compatibility but is no longer necessary. Successful keys are always skipped
+on resume.
 Top-level Prob-RVEA and Prob-MOEA/D errors are isolated to their method group:
 failed rows, including the traceback, are written to the corresponding problem
 CSV and the worker continues with the next method.

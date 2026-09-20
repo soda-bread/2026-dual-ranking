@@ -4,10 +4,16 @@ import unittest
 from unittest.mock import patch
 
 from experiments import run_all_methods
+from experiments import project_environment
 from experiments.project_environment import PROJECT_PYTHON
 
 
 class UnifiedDispatcherTest(unittest.TestCase):
+    def test_molecule_dependencies_follow_problem_selection(self):
+        self.assertTrue(project_environment._includes_molecule(None))
+        self.assertTrue(project_environment._includes_molecule("zdt1,molecule"))
+        self.assertFalse(project_environment._includes_molecule("zdt1,re21"))
+
     def test_unified_registry_contains_only_the_18_experiment_methods(self):
         self.assertEqual(len(run_all_methods.ALL_METHODS), 18)
         self.assertEqual(len(set(run_all_methods.ALL_METHODS)), 18)

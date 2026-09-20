@@ -27,6 +27,11 @@ BASE_MODULES = {
     "diversipy": "diversipy",
 }
 
+MOLECULE_MODULES = {
+    "RDKit (required by Molecule)": "rdkit",
+    "Chemprop (required by Molecule)": "chemprop",
+}
+
 PINNED_VERSIONS = {
     "numpy": "1.26.4",
     "pandas": "2.2.3",
@@ -44,6 +49,8 @@ PINNED_VERSIONS = {
     "botorch": "0.10.0",
     "gpytorch": "1.11",
     "pyro-ppl": "1.9.1",
+    "rdkit": "2023.9.4",
+    "chemprop": "1.6.1",
     "autogluon.tabular": "1.2.0",
     "xgboost": "2.1.3",
 }
@@ -65,6 +72,8 @@ MODULE_DISTRIBUTIONS = {
     "botorch": "botorch",
     "gpytorch": "gpytorch",
     "pyro": "pyro-ppl",
+    "rdkit": "rdkit",
+    "chemprop": "chemprop",
     "autogluon.tabular": "autogluon.tabular",
     "xgboost": "xgboost",
 }
@@ -149,7 +158,22 @@ def _normalized_release(version: str) -> tuple[int | str, ...]:
     return tuple(int(part) if part.isdigit() else part for part in release)
 
 
-def environment_issues(methods: Iterable[str]) -> list[str]:
+def _includes_molecule(problems: Iterable[str] | str | None) -> bool:
+    if problems is None:
+        # No CLI override means the configured full suite, which includes it.
+        return True
+    if isinstance(problems, str):
+        problems = problems.split(",")
+    return any(
+        str(problem).strip().lower().replace("_", "-")
+        in {"molecule", "molecule-exact-v0"}
+        for problem in problems
+    )
+
+
+def environment_issues(
+    methods: Iterable[str], problems: Iterable[str] | str | None = None
+) -> list[str]:
     """Report missing local-runtime pieces for the selected methods."""
 
     issues = []
@@ -166,6 +190,8 @@ def environment_issues(methods: Iterable[str]) -> list[str]:
         )
 
     required = dict(BASE_MODULES)
+    if _includes_molecule(problems):
+        required.update(MOLECULE_MODULES)
     for method in methods:
         required.update(METHOD_MODULES.get(method, {}))
     missing = sorted(label for label, module in required.items() if not _module_available(module))
@@ -204,9 +230,11 @@ def environment_issues(methods: Iterable[str]) -> list[str]:
     return issues
 
 
-def format_environment_report(methods: Iterable[str]) -> str:
+def format_environment_report(
+    methods: Iterable[str], problems: Iterable[str] | str | None = None
+) -> str:
     selected = tuple(methods)
-    issues = environment_issues(selected)
+    issues = environment_issues(selected, problems)
     if not issues:
         return (
             f"Environment OK: {PROJECT_PYTHON} | Python "

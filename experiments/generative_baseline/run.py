@@ -9,6 +9,7 @@ import copy
 import itertools
 import multiprocessing as mp
 import sys
+import traceback
 from pathlib import Path
 
 
@@ -18,11 +19,16 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.worker_runtime import (  # noqa: E402
+    group_log_path,
     initialize_worker_threads,
+    redirect_process_output,
     set_worker_thread_environment,
+    suppress_known_optional_dependency_warnings,
 )
+from experiments.progress import ProgressReporter  # noqa: E402
 
 set_worker_thread_environment(1)
+suppress_known_optional_dependency_warnings()
 
 from experiments.generative_baseline import (  # noqa: E402
     BASELINE_NAMES,
@@ -30,6 +36,7 @@ from experiments.generative_baseline import (  # noqa: E402
 )
 from experiments.generative_baseline.common import (  # noqa: E402
     append_row,
+    configuration_hash,
     load_config,
     read_success_keys,
     result_key,
@@ -198,22 +205,42 @@ def _execute_group(payload):
     """Run one independent model/data group in a worker process."""
 
     initialize_worker_threads(1)
-    return run_group(**payload)
+    log_path = group_log_path(
+        payload["output_dir"],
+        payload["problem"],
+        payload["training_size"],
+        payload["offline_seed"],
+        payload["method"],
+    )
+    with redirect_process_output(log_path) as log_handle:
+        print(
+            f"\n=== source=official_pool | problem={payload['problem']} | "
+            f"N={payload['training_size']} | "
+            f"offline_seed={payload['offline_seed']} | "
+            f"method={payload['method']} | opt={list(payload['opt_seeds'])} ===",
+            file=log_handle,
+            flush=True,
+        )
+        try:
+            return run_group(**payload)
+        except Exception:
+            traceback.print_exc(file=log_handle)
+            raise
 
 
 def main(argv=None):
     args, config = parse_args(argv)
     plan = build_plan(args)
     total = len(plan) * len(args.optimization_seeds)
-    print(f"Protocol: {PROTOCOL_VERSION}")
-    print(
-        f"Plan: {len(plan)} model/data groups, {total} generation runs; "
-        f"output_size={args.output_size}; device={args.device}; "
-        f"max_workers={args.max_workers}"
-    )
-    print(f"Output: {args.output_dir}")
-    print(f"Subset cache: {args.subset_cache_dir}")
     if args.dry_run:
+        print(f"Protocol: {PROTOCOL_VERSION}")
+        print(
+            f"Plan: {len(plan)} model/data groups, {total} generation runs; "
+            f"output_size={args.output_size}; device={args.device}; "
+            f"max_workers={args.max_workers}"
+        )
+        print(f"Output: {args.output_dir}")
+        print(f"Subset cache: {args.subset_cache_dir}")
         for method, problem, size, offline_seed in plan:
             print(
                 f"{method} | {problem} | N={size} | offline_seed={offline_seed} "
@@ -223,16 +250,47 @@ def main(argv=None):
 
     results_path = args.output_dir / "generative_baselines.csv"
     completed = read_success_keys(results_path) if args.resume else set()
-    succeeded = failed = 0
 
-    def payload_for(task):
+    def configuration_hash_for(method):
+        relevant_config = {
+            "algorithm": config[METHOD_CONFIG_KEYS[method]],
+            "proxy": config["proxy"] if method == "ParetoFlow" else None,
+        }
+        return configuration_hash(method, relevant_config)
+
+    def pending_seeds(task):
+        method, problem, size, offline_seed = task
+        config_hash = configuration_hash_for(method)
+        return tuple(
+            int(opt_seed)
+            for opt_seed in args.optimization_seeds
+            if (
+                PROTOCOL_VERSION,
+                config_hash,
+                problem,
+                method,
+                int(size),
+                int(offline_seed),
+                int(opt_seed),
+                int(args.output_size),
+            )
+            not in completed
+        )
+
+    scheduled = [
+        (task, seeds) for task in plan if (seeds := pending_seeds(task))
+    ]
+    skipped = total - sum(len(seeds) for _, seeds in scheduled)
+    progress = ProgressReporter(total, skipped)
+
+    def payload_for(task, seeds):
         method, problem, size, offline_seed = task
         return {
             "method": method,
             "problem": problem,
             "training_size": size,
             "offline_seed": offline_seed,
-            "opt_seeds": args.optimization_seeds,
+            "opt_seeds": seeds,
             "all_training_sizes": args.training_sizes,
             "subset_cache_dir": args.subset_cache_dir,
             "output_dir": args.output_dir,
@@ -243,49 +301,39 @@ def main(argv=None):
             "completed": completed,
         }
 
-    def record_group(index, task, rows=None, error=None):
-        nonlocal succeeded, failed
+    def record_group(task, seeds, rows=None, error=None):
         method, problem, size, offline_seed = task
-        print(
-            f"[{index}/{len(plan)}] {method} | {problem} | N={size} "
-            f"| offline_seed={offline_seed}"
+        label = (
+            f"{problem} | N={size} | offline_seed={offline_seed} | {method}"
         )
         if error is not None:
-            failed += len(args.optimization_seeds)
-            print(f"  group failed: {type(error).__name__}: {error}", file=sys.stderr)
+            progress.record(0, len(seeds), label)
             return
-        if not rows:
-            print("  skipped: all requested runs already succeeded")
-            return
+        success_count = 0
+        failed_count = 0
         for row in rows:
             append_row(results_path, row)
             if row["status"] == "success":
-                succeeded += 1
+                success_count += 1
                 completed.add(result_key(row))
             else:
-                failed += 1
-            print(
-                f"  opt_seed={row['opt_seed']} status={row['status']} "
-                f"HVreal={row.get('HVreal', '')}"
-            )
+                failed_count += 1
+        progress.record(success_count, failed_count, label)
 
-    indexed_plan = list(enumerate(plan, 1))
+    progress.start()
     for method_name in args.methods:
-        stage = [item for item in indexed_plan if item[1][0] == method_name]
+        stage = [item for item in scheduled if item[0][0] == method_name]
         worker_count = min(args.max_workers, len(stage)) if stage else 1
         if worker_count == 1:
-            for index, task in stage:
+            for task, seeds in stage:
                 try:
-                    rows = _execute_group(payload_for(task))
+                    rows = _execute_group(payload_for(task, seeds))
                 except Exception as error:
-                    record_group(index, task, error=error)
+                    record_group(task, seeds, error=error)
                 else:
-                    record_group(index, task, rows=rows)
+                    record_group(task, seeds, rows=rows)
             continue
 
-        print(
-            f"Running {method_name} groups with {worker_count} worker processes"
-        )
         context = mp.get_context("spawn")
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=worker_count,
@@ -294,19 +342,19 @@ def main(argv=None):
             initargs=(1,),
         ) as executor:
             futures = {
-                executor.submit(_execute_group, payload_for(task)): (index, task)
-                for index, task in stage
+                executor.submit(_execute_group, payload_for(task, seeds)): (task, seeds)
+                for task, seeds in stage
             }
             for future in concurrent.futures.as_completed(futures):
-                index, task = futures[future]
+                task, seeds = futures[future]
                 try:
                     rows = future.result()
                 except Exception as error:
-                    record_group(index, task, error=error)
+                    record_group(task, seeds, error=error)
                 else:
-                    record_group(index, task, rows=rows)
-    print(f"Finished: {succeeded} succeeded, {failed} failed")
-    return 1 if failed else 0
+                    record_group(task, seeds, rows=rows)
+    progress.complete(args.output_dir)
+    return 1 if progress.total_failed else 0
 
 
 if __name__ == "__main__":

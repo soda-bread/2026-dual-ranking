@@ -4,10 +4,8 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import gc
 import os
-import re
 import sys
 import itertools
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -18,12 +16,20 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.worker_runtime import (  # noqa: E402
+    group_log_path,
     initialize_worker_threads,
+    redirect_process_output,
     set_worker_thread_environment,
+    suppress_known_optional_dependency_warnings,
 )
+from experiments.progress import ProgressReporter  # noqa: E402
 
 # Spawned workers inherit these limits before importing NumPy, BLAS, or Torch.
 set_worker_thread_environment(1)
+suppress_known_optional_dependency_warnings()
+# Batch experiments only write summary figures; never initialize an interactive
+# display backend on login nodes, compute nodes, or local headless test runs.
+os.environ.setdefault("MPLBACKEND", "Agg")
 
 from sample_size_common import (
     LHS_SEEDS, METHOD_REGISTRY, OPT_SEEDS, PROBLEMS, TRAIN_SIZES, TEST_SIZE,
@@ -66,7 +72,14 @@ def parse_args(argv=None):
     parser.add_argument("--subset-cache-dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help=(
+            "deprecated compatibility flag; failed rows are always retried "
+            "when --resume is enabled"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-workers", type=int)
     parser.add_argument(
@@ -190,19 +203,6 @@ def build_plan(args):
         )
         for row in existing if valid_success(row)
     }
-    failed = {
-        _key(
-            row.get("dataset_source") or "lhs",
-            result_protocol_version(row),
-            *result_optimizer_settings(row),
-            row["problem"],
-            row["method"],
-            row["training_size"],
-            row["lhs_seed"],
-            row["opt_seed"],
-        )
-        for row in existing if row.get("status") == "failed"
-    }
     groups = []
     skipped = 0
     for problem, size, lhs_seed, method in itertools.product(
@@ -222,17 +222,11 @@ def build_plan(args):
             )
             if args.resume and key in successful:
                 skipped += 1
-            elif args.resume and key in failed and not args.retry_failed:
-                skipped += 1
             else:
                 pending.append(opt_seed)
         if pending:
             groups.append((problem, size, lhs_seed, method, tuple(pending)))
     return groups, skipped
-
-
-def _safe_log_component(value):
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "item"
 
 
 def _release_worker_memory():
@@ -250,28 +244,6 @@ def _release_worker_memory():
         pass
 
 
-@contextlib.contextmanager
-def _redirect_process_output(log_path):
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8", buffering=1) as log_handle:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        saved_stdout = os.dup(1)
-        saved_stderr = os.dup(2)
-        try:
-            os.dup2(log_handle.fileno(), 1)
-            os.dup2(log_handle.fileno(), 2)
-            with contextlib.redirect_stdout(log_handle), contextlib.redirect_stderr(log_handle):
-                yield log_handle
-        finally:
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os.dup2(saved_stdout, 1)
-            os.dup2(saved_stderr, 2)
-            os.close(saved_stdout)
-            os.close(saved_stderr)
-
-
 def _execute(payload):
     initialize_worker_threads(1)
     (
@@ -287,12 +259,8 @@ def _execute(payload):
         subset_cache_dir,
         all_sample_sizes,
     ) = payload
-    log_name = (
-        f"{_safe_log_component(problem)}_N{size}_lhs{lhs_seed}_"
-        f"{_safe_log_component(method)}.log"
-    )
-    log_path = Path(output_dir) / "logs" / log_name
-    with _redirect_process_output(log_path) as log_handle:
+    log_path = group_log_path(output_dir, problem, size, lhs_seed, method)
+    with redirect_process_output(log_path) as log_handle:
         print(
             f"\n=== source={dataset_source} | problem={problem} | N={size} | "
             f"offline_seed={lhs_seed} | "
@@ -393,29 +361,16 @@ def main(argv=None):
         )
         for group in groups
     ]
-    processed = int(skipped)
-    executed_success = 0
-    executed_failed = 0
+    progress = ProgressReporter(total, skipped)
 
     def record_progress(rows, label, write_results=True):
-        nonlocal processed, executed_success, executed_failed
         if write_results:
             append_rows(args.output_dir, rows)
         success_count = sum(row.get("status") == "success" for row in rows)
         failed_count = len(rows) - success_count
-        processed += len(rows)
-        executed_success += success_count
-        executed_failed += failed_count
-        percentage = 100.0 * processed / total if total else 100.0
-        print(
-            f"[progress] {processed}/{total} ({percentage:.2f}%) | "
-            f"success={success_count} | failed={failed_count} | "
-            f"total_success={executed_success} | total_failed={executed_failed} | "
-            f"skipped={skipped} | {label}",
-            flush=True,
-        )
+        progress.record(success_count, failed_count, label)
 
-    print(f"[progress] {processed}/{total} | skipped={skipped}", flush=True)
+    progress.start()
     # Execute complete method stages in the configured/CLI order. Regular methods
     # can use the full CPU allocation; only the TabPFN stage receives the smaller
     # API-concurrency cap.
@@ -457,7 +412,7 @@ def main(argv=None):
             for future in as_completed(future_labels):
                 record_progress(future.result(), future_labels[future], write_results=False)
     summarize(args.output_dir, args.output_dir)
-    print(f"[progress] complete | results={args.output_dir}", flush=True)
+    progress.complete(args.output_dir)
     return 0
 
 

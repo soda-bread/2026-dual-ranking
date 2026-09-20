@@ -29,6 +29,10 @@ botorch==0.10.0
 gpytorch==1.11
 pyro-ppl==1.9.1
 
+# Molecule's official oracle and pretrained property models.
+rdkit==2023.9.4
+chemprop==1.6.1
+
 # AutoGluon supplies quantile regression, XGBoost, and the weighted ensemble.
 autogluon.tabular==1.2.0
 xgboost==2.1.3

@@ -181,7 +181,14 @@ def parse_args(argv=None):
     )
     parser.add_argument("--output-size", type=int, help="generative output size")
     parser.add_argument("--max-workers", type=int, help="main-runner worker count")
-    parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help=(
+            "deprecated compatibility flag; failed rows are always retried "
+            "when --resume is enabled"
+        ),
+    )
     parser.add_argument(
         "--smoke",
         action="store_true",
@@ -367,13 +374,16 @@ def main(argv=None):
         return 0
 
     if args.check_environment:
-        print(format_environment_report(args.methods))
-        return 1 if environment_issues(args.methods) else 0
+        print(format_environment_report(args.methods, args.problems))
+        return 1 if environment_issues(args.methods, args.problems) else 0
 
     if not args.dry_run:
-        issues = environment_issues(args.methods)
+        issues = environment_issues(args.methods, args.problems)
         if issues:
-            print(format_environment_report(args.methods), file=sys.stderr)
+            print(
+                format_environment_report(args.methods, args.problems),
+                file=sys.stderr,
+            )
             return 2
 
     commands = build_commands(args)

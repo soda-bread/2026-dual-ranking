@@ -168,6 +168,8 @@ def _matrix(values: np.ndarray, name: str) -> np.ndarray:
 def ensure_import_paths() -> None:
     import sys
 
+    from src.offline_moo_adapter import suppress_offline_moo_optional_warnings
+
     if not OFFLINE_MOO_ROOT.exists():
         raise FileNotFoundError(
             "external/offline-moo is missing. Run "
@@ -177,6 +179,7 @@ def ensure_import_paths() -> None:
         text = str(path)
         if text not in sys.path:
             sys.path.insert(0, text)
+    suppress_offline_moo_optional_warnings()
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -771,6 +774,25 @@ def result_key(row: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def method_configuration_hash(
+    method: str,
+    neural_config: dict[str, Any],
+    com_config: dict[str, Any],
+    mobo_config: dict[str, Any],
+) -> str:
+    """Return the run identity hash for one DL/MOBO method."""
+
+    relevant_config = {
+        "method": method,
+        "neural": neural_config if method != "MOBO-Vallina" else None,
+        "com": com_config if method == "MultipleModels-COM" else None,
+        "mobo": mobo_config if method == "MOBO-Vallina" else None,
+    }
+    return hashlib.sha256(
+        json.dumps(relevant_config, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
 def read_success_keys(path: Path) -> set[tuple[Any, ...]]:
     if not Path(path).exists():
         return set()
@@ -861,15 +883,9 @@ def run_group(
         all_training_sizes,
         subset_cache_dir,
     )
-    relevant_config = {
-        "method": method,
-        "neural": neural_config if method != "MOBO-Vallina" else None,
-        "com": com_config if method == "MultipleModels-COM" else None,
-        "mobo": mobo_config if method == "MOBO-Vallina" else None,
-    }
-    configuration_hash = hashlib.sha256(
-        json.dumps(relevant_config, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    configuration_hash = method_configuration_hash(
+        method, neural_config, com_config, mobo_config
+    )
     pending = []
     for opt_seed in opt_seeds:
         probe = _base_row(
