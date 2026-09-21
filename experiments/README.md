@@ -1,8 +1,7 @@
 # Unified experiment suite
 
 This directory is the single home for experiment configurations, notebooks,
-executable per-method scripts, baselines, the complete sample-size runner, and
-result summaries.
+baselines, unified runners, and result summaries.
 
 The vendored baseline tree tracks only the Python packages required by
 Prob-RVEA, Prob-MOEA/D, and TGPR-MO. Upstream plots, generated results, sample
@@ -11,7 +10,7 @@ archives, documentation builds, and caches remain excluded from Git.
 Run the two configured experiment groups separately from the repository root:
 
 ```bash
-# Eight GPR/QR/BNN methods, including the four DR variants.
+# Twelve GPR/QR/BNN methods: four normal, four dr, and four ebu_dr variants.
 .venv/bin/python experiments/run_primary_methods.py --dry-run
 .venv/bin/python experiments/run_primary_methods.py --resume
 
@@ -37,37 +36,20 @@ uses only that repository-local interpreter for real runs; it never inherits a
 virtual environment belonging to a sibling project.
 
 `run_all_methods.py` is an internal dispatcher for these two fixed entries. It
-exposes only the 18 experiment methods and rejects mixed primary/baseline runs.
+exposes only the 22 active experiment methods and rejects mixed
+primary/baseline runs.
 XGBoost, Weighted Ensemble L2, and TabPFN remain in the low-level model
 registry but are intentionally absent from the unified entries and cannot be
 selected through them.
 
-The executable `Exp*.py` files were generated from their matching notebooks.
-
-Run one experiment, for example:
-
-```bash
-python Exp1_GPR_RBF.py
-```
-
-Each script streams stdout/stderr to the terminal and appends the same content to `logs/<method_name>.log`.
-After all configured problems finish, each script appends one row per method/optimizer/problem to:
-
-- `results/results_real_world.csv`
-
-Each script also appends one raw per-seed record per problem to:
-
-- `results/<method_name>.txt`
-
-`config.yaml` is the canonical default configuration. Standalone Exp1-Exp4
-runs use `N=100` for every problem. Edit it to change problem lists, seeds,
-population size, or sample sizes.
-
-Standalone Exp11-Exp13 scripts have been removed. Their XGBoost, Weighted
-Ensemble, and TabPFN implementations remain only as hidden low-level code.
+`config.yaml` is the canonical LHS configuration. Edit it to change problem
+lists, seeds, population size, or sample sizes. XGBoost, Weighted Ensemble,
+and TabPFN remain only as hidden low-level implementations.
 
 The configured paper suite is ZDT1/2/3/4/6, OmniTest, VLMOP1-3, DTLZ1-7,
-RE21-25, RE31-37, MO-Portfolio, and Molecule. Both two- and three-objective
+RE21-25, RE31-37, and MO-Portfolio. Molecule remains available through an
+explicit `--problems molecule` selection but is temporarily excluded from the
+default suite. Both two- and three-objective
 problems are supported.
 
 ## Generative baselines
@@ -150,16 +132,40 @@ transform. IGD+ uses a true/reference front when supplied by the problem and
 otherwise records an offline non-dominated-front fallback. The paper itself
 reports HV only; IGD+ is an additional normalized metric in this repository.
 
-All Dual Ranking uncertainty bounds use the configured one-sided quantile (0.90
-by default). GPR exposes latent/epistemic standard deviation; q80, q90, and q95
+The primary entry exposes three categories: `normal`, `dr`, and `ebu_dr`. All
+DR uncertainty bounds use the configured one-sided quantile (0.90 by default).
+GPR exposes latent/epistemic standard deviation; q80, q90, and q95
 use the matching Gaussian weights 0.8416, 1.2816, and 1.6449 instead of one
 fixed standard-deviation multiplier. BNN derives its standard deviation and
 q80/q90/q95 from posterior function-mean samples rather than observation
 samples. QR uses the native learned quantile without reflecting crossings. No
 empirical coverage adjustment is applied.
 
-Exp1–Exp4 train one surrogate per objective on 100% of the selected offline
-dataset. The independent test data is reserved for prediction-error reporting.
+EBU-DR uses deterministic five-fold out-of-fold predictions from the same
+selected N-row offline subset to estimate its empirical-Bayes parameters. It
+then ranks on the concatenated mean and adjusted views while crowding remains
+on the mean objectives. One cache is maintained per problem, surrogate family,
+dataset source, N, offline seed, selected-row hash, protocol, and EBU-DR
+configuration. Consequently, runs at N=50/100/200/400/1000 remain independent;
+changing N, the subset, or the configuration forces parameter refitting.
+`ebu_dr_params.csv` records `m`, `tau2`, `c`, `slope`, `s2max`, and `signal`
+for every objective.
+
+After the three primary categories finish, create the paired per-cell Cliff's
+delta table and aggregate one-sided Wilcoxon table with:
+
+```bash
+.venv/bin/python experiments/analysis_dr.py \
+  --results-dir experiments/results_primary_methods \
+  --metric HVreal
+```
+
+The default controls are `normal`, `dr`, and a duplicated-normal null control
+(`ctrl_duplicate`).
+
+The GPR, QR, and BNN methods train one surrogate per objective on 100% of the
+selected offline dataset. The independent test data is reserved for
+prediction-error reporting.
 
 ## Official Off-MOO training-pool mode
 

@@ -35,7 +35,8 @@ problems:
   - re36
   - re37
   - mo-portfolio
-  - molecule
+  # molecule is temporarily excluded from default runs; use
+  # --problems molecule to run it explicitly.
 
 dataset_source: official_pool
 training_sizes: [50, 100, 200, 400, 1000]

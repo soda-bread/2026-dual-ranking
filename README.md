@@ -16,7 +16,7 @@ src/                   Shared data generation, model, optimization, and metric c
 ## Repository-local environment
 
 The project is self-contained and must not be run from another repository's
-virtual environment. Python 3.11 and packages for the 18 experiment methods,
+virtual environment. Python 3.11 and packages for the 22 active experiment methods,
 plus the three hidden implementations, are defined by the root
 `requirements.txt`. Set up the repository-owned `.venv`
 from the repository root:
@@ -49,7 +49,8 @@ The configured suite contains:
 - two-objective ZDT1/2/3/4/6 and OmniTest;
 - VLMOP1/2 and three-objective VLMOP3;
 - three-objective DTLZ1-7;
-- RE21-25, RE31-37, MO-Portfolio, and Molecule.
+- RE21-25, RE31-37, and MO-Portfolio. Molecule remains supported but is
+  temporarily excluded from default runs and can be selected explicitly.
 
 RE, VLMOP, MO-Portfolio, and Molecule use the implementations in
 `external/offline-moo`; ZDT, DTLZ, and OmniTest use pymoo.
@@ -150,7 +151,8 @@ paper-compatible extension rather than a reproduced paper metric.
 
 ### Uncertainty Protocol
 
-Dual Ranking uses the configured one-sided quantile (0.90 by default). GPR
+The primary methods are grouped as `normal`, `dr`, and `ebu_dr`. DR uses the
+configured one-sided quantile (0.90 by default). GPR
 predictions use latent function variance only (`include_likelihood=False`), so
 fitted likelihood noise is not counted as epistemic uncertainty. Gaussian q80,
 q90, and q95 candidates use `mean + z_q * epistemic_std`, with weights 0.8416,
@@ -158,9 +160,15 @@ q90, and q95 candidates use `mean + z_q * epistemic_std`, with weights 0.8416,
 computed from posterior function-mean samples, excluding observation noise. QR
 uses the model's native q80/q90/q95 directly; crossed quantiles are not reflected
 or converted into heuristic upper bounds. No empirical coverage adjustment is
-applied.
+applied. EBU-DR estimates its objective-wise shrinkage parameters from
+deterministic five-fold out-of-fold predictions on the selected N rows. Its
+cache key includes the problem, surrogate family, dataset source, N, offline
+seed, selected-row hash, protocol, and EBU-DR configuration, so the
+50/100/200/400/1000 experiments cannot reuse parameters from another dataset
+size or subset. Estimated parameters are also written to
+`ebu_dr_params.csv`.
 
-The standalone Exp1–Exp4 entry points train one surrogate per objective using
+The GPR, QR, and BNN methods train one surrogate per objective using
 100% of the selected offline dataset. The independent test set is used only to
 report prediction error.
 
@@ -170,7 +178,7 @@ uses nested random prefixes for sample sizes 50/100/200/400/1000, and caches
 the shared subset indices under `experiments/data_subsets/`. Here N is the selected
 offline-dataset cardinality, while the optimizer population size is separately
 fixed at 100. Every surrogate and baseline fits all N selected offline rows in
-both standalone and unified runs.
+unified runs.
 Optimizer initial populations use the complete selected N rows. The default
 official-pool optimization seeds are 1..10, matching the default LHS mode and
 remaining independently controlled from offline/model seeds 1..10. When N=50
@@ -195,12 +203,12 @@ For `RE22`-`RE25`, the second objective in the offline-moo implementation is the
 
 ## Running Benchmark Experiments
 
-The benchmark notebooks are in `experiments/`. Their standalone default uses
-`N=100` for every configured problem. Edit `experiments/config.yaml` to change
-problem names, seeds, population size, generations, or sample sizes.
+The benchmark notebooks are in `experiments/`. Edit `experiments/config.yaml`
+to change problem names, seeds, population size, generations, or sample sizes.
 
 The active suite is split into two fixed experiment entries. The primary
-entry runs the eight GPR, QR, and BNN methods (including their DR variants).
+entry runs 12 GPR, QR, and BNN methods: four `normal`, four `dr`, and four
+`ebu_dr` variants.
 The baseline entry runs TGPR-MO, DDMOEA-GAN, Prob-RVEA, Prob-MOEA/D, the four
 Off-MOO DL/MOBO baselines, PCD, and ParetoFlow:
 
@@ -247,11 +255,11 @@ python experiments/run_all.py --resume
 
 Use `experiments/config_official_pool.yaml` for the official-pool protocol.
 
-Outputs are appended to:
+Raw results and worker logs are written under the configured output directory:
 
 ```text
-experiments/results/results_real_world.csv
-experiments/results/<method_name>.txt
+experiments/results/csv/exp*_results.csv
+experiments/results/logs/*.log
 ```
 
 ## Notes

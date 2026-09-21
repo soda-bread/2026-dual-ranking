@@ -81,12 +81,16 @@ MODULE_DISTRIBUTIONS = {
 METHOD_MODULES = {
     "GPR-RBF + NSGA-II": {"GPy": "GPy"},
     "GPR-RBF + NSGA-II + DR": {"GPy": "GPy"},
+    "GPR-RBF + NSGA-II + EBU-DR": {"GPy": "GPy"},
     "GPR-Matern + NSGA-II": {"GPy": "GPy"},
     "GPR-Matern + NSGA-II + DR": {"GPy": "GPy"},
+    "GPR-Matern + NSGA-II + EBU-DR": {"GPy": "GPy"},
     "QR + NSGA-II": {"AutoGluon": "autogluon.tabular"},
     "QR + NSGA-II + DR": {"AutoGluon": "autogluon.tabular"},
+    "QR + NSGA-II + EBU-DR": {"AutoGluon": "autogluon.tabular"},
     "BNN + NSGA-II": {"PyTorch": "torch", "Pyro": "pyro"},
     "BNN + NSGA-II + DR": {"PyTorch": "torch", "Pyro": "pyro"},
+    "BNN + NSGA-II + EBU-DR": {"PyTorch": "torch", "Pyro": "pyro"},
     "XGBoost + NSGA-II": {
         "AutoGluon": "autogluon.tabular",
         "XGBoost": "xgboost",
@@ -160,8 +164,8 @@ def _normalized_release(version: str) -> tuple[int | str, ...]:
 
 def _includes_molecule(problems: Iterable[str] | str | None) -> bool:
     if problems is None:
-        # No CLI override means the configured full suite, which includes it.
-        return True
+        # Molecule is temporarily excluded from every runner's default suite.
+        return False
     if isinstance(problems, str):
         problems = problems.split(",")
     return any(

@@ -53,6 +53,8 @@ TEST_SIZE = 100
 LHS_PROTOCOL_VERSION = "lhs_full_offline_native_quantile_v6"
 OFFICIAL_PROTOCOL_VERSION = "official_pool_full_offline_native_quantile_v10"
 PYMOO_MUTATION_PROTOCOL_VERSION = "pm_individual1_variable1overd_v1"
+RANK_AND_CROWD_PROTOCOL_VERSION = "shared_rank_crowd_break_v1"
+EBU_DR_PROTOCOL_VERSION = "ebu_dr_three_regime_v1"
 
 
 def current_protocol_version(dataset_source, method=None):
@@ -67,6 +69,17 @@ def current_protocol_version(dataset_source, method=None):
             spec.family not in BASELINE_FAMILIES or spec.family == "ddmoea_gan"
         ):
             version = f"{version}+{PYMOO_MUTATION_PROTOCOL_VERSION}"
+        if spec is not None and spec.category in {"normal", "dr", "ebu_dr", "hidden"}:
+            version = f"{version}+{RANK_AND_CROWD_PROTOCOL_VERSION}"
+        if spec is not None and spec.category == "ebu_dr":
+            method_configuration = dict(_root_config.get("ebu_dr") or {})
+            configuration_hash = hashlib.sha256(
+                json.dumps(method_configuration, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            version = (
+                f"{version}+{EBU_DR_PROTOCOL_VERSION}"
+                f"+cfg-{configuration_hash[:12]}"
+            )
         if spec is not None and spec.family == "ddmoea_gan":
             method_configuration = dict(_root_config.get("ddmoea_gan") or {})
             configuration_hash = hashlib.sha256(
@@ -137,12 +150,37 @@ def load_config_file(path):
 
 _root_config = load_config_file(EXPERIMENTS_DIR / "config.yaml")
 _ablation_config = _root_config.get("sample_size_ablation", {})
-PROBLEMS = tuple(_root_config.get("problem_names", PROBLEMS))
 TRAIN_SIZES = tuple(int(value) for value in _ablation_config.get("train_sizes", TRAIN_SIZES))
 LHS_SEEDS = tuple(int(value) for value in _ablation_config.get("lhs_seeds", LHS_SEEDS))
 OPT_SEEDS = tuple(int(value) for value in _ablation_config.get("opt_seeds", OPT_SEEDS))
 TEST_SIZE = int(_ablation_config.get("test_size", TEST_SIZE))
-DUAL_RANKING_QUANTILE = float(_root_config.get("dual_ranking_quantile", 0.90))
+DR_QUANTILE = float(
+    _root_config.get("dr_quantile", _root_config.get("dual_ranking_quantile", 0.90))
+)
+EBU_DR_CONFIG = dict(_root_config.get("ebu_dr") or {})
+
+
+def configure_method_settings(root_config):
+    """Use method settings from the configuration selected by the runner.
+
+    The module defaults remain useful for direct imports and tests, while the
+    unified runner calls this function before it builds resume keys or jobs.
+    """
+
+    global _root_config, DR_QUANTILE, EBU_DR_CONFIG
+    _root_config = dict(root_config or {})
+    DR_QUANTILE = float(
+        _root_config.get(
+            "dr_quantile", _root_config.get("dual_ranking_quantile", 0.90)
+        )
+    )
+    EBU_DR_CONFIG = dict(_root_config.get("ebu_dr") or {})
+    view = str(EBU_DR_CONFIG.get("view", "concat"))
+    uninformative = str(EBU_DR_CONFIG.get("uninformative", "sigma"))
+    if view != "concat":
+        raise ValueError("ebu_dr.view must be 'concat'.")
+    if uninformative != "sigma":
+        raise ValueError("ebu_dr.uninformative must be 'sigma'.")
 
 
 RESULT_FIELDS = (
@@ -336,24 +374,264 @@ def _train_predictor(lhs_seed: int, spec: MethodSpec, data):
     return models_pair, use_surrogate, elapsed, model_seed
 
 
-def _survival(spec, models_pair, data):
-    from src.survival import Survival_dual_ranking, Survival_standard
+class _OOFQRModel:
+    """Small adapter giving AutoGluon QR the shared fit/predict protocol."""
+
+    def __init__(self, random_state):
+        self.random_state = int(random_state)
+        self.model = None
+
+    def fit(self, X, y):
+        from src import models
+
+        self.model = models.autogluon_qr_fit_predict(
+            X,
+            y,
+            np.asarray(X[:1], dtype=float),
+            random_state=self.random_state,
+        )[1]
+        return self
+
+    def predict(self, X):
+        from src.models import autogluon_qr_mean_std
+
+        return autogluon_qr_mean_std(self.model, X)
+
+    def cleanup(self):
+        finalizer = getattr(self.model, "_experiment_cleanup_finalizer", None)
+        if finalizer is not None and finalizer.alive:
+            finalizer()
+
+
+def _oof_model_factory(spec):
+    def factory(objective_index, fold_index, fold_seed):
+        del objective_index, fold_index
+        from src import models
+
+        if spec.family == "gpr_rbf":
+            return models.GPR_RBF()
+        if spec.family == "gpr_matern":
+            return models.GPR_Matern()
+        if spec.family == "bnn":
+            return models.BNNRegressor(random_state=fold_seed)
+        if spec.family == "qr":
+            return _OOFQRModel(random_state=fold_seed)
+        raise ValueError(f"EBU-DR does not support family: {spec.family}")
+
+    return factory
+
+
+def _ebu_configuration_hash():
+    return hashlib.sha256(
+        json.dumps(EBU_DR_CONFIG, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _ebu_cache_metadata(spec, data, problem_name, training_size, offline_seed):
+    return {
+        "protocol": EBU_DR_PROTOCOL_VERSION,
+        "configuration_hash": _ebu_configuration_hash(),
+        "dataset_source": str(_dataset_scalar(data, "dataset_source", "lhs")),
+        "subset_indices_hash": _subset_indices_hash(data),
+        "problem": str(problem_name),
+        "family": str(spec.family),
+        "training_size": int(training_size),
+        "offline_seed": int(offline_seed),
+        "n_folds": int(EBU_DR_CONFIG.get("n_folds", 5)),
+    }
+
+
+def _ebu_cache_path(output_dir, metadata):
+    safe_problem = str(metadata["problem"]).replace("/", "_")
+    safe_source = str(metadata["dataset_source"]).replace("/", "_")
+    subset_tag = str(metadata["subset_indices_hash"] or "no-subset-hash")[:12]
+    configuration_tag = str(metadata["configuration_hash"])[:12]
+    filename = (
+        f"{safe_problem}_{metadata['family']}_{safe_source}_"
+        f"N{metadata['training_size']}_offline{metadata['offline_seed']}_"
+        f"subset-{subset_tag}_cfg-{configuration_tag}.json"
+    )
+    return Path(output_dir) / "ebu_dr_cache" / filename
+
+
+def _json_ebu_params(params):
+    return {
+        name: np.asarray(values).tolist()
+        for name, values in params.items()
+    }
+
+
+def _write_ebu_params_table(output_dir, metadata, params):
+    path = Path(output_dir) / "ebu_dr_params.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = (
+        "protocol", "configuration_hash", "dataset_source",
+        "subset_indices_hash", "problem", "family", "training_size",
+        "offline_seed", "n_folds", "objective", "m", "tau2", "c",
+        "slope", "s2max", "signal",
+    )
+    with path.open("a+", newline="", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.seek(0)
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+            existing = {
+                (
+                    row.get("configuration_hash"),
+                    row.get("dataset_source"),
+                    row.get("subset_indices_hash"),
+                    row.get("problem"),
+                    row.get("family"),
+                    int(row.get("training_size") or -1),
+                    int(row.get("offline_seed") or -1),
+                    int(row.get("objective") or -1),
+                )
+                for row in rows
+            }
+            handle.seek(0, os.SEEK_END)
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            if handle.tell() == 0:
+                writer.writeheader()
+            for objective in range(len(params["m"])):
+                key = (
+                    metadata["configuration_hash"],
+                    metadata["dataset_source"],
+                    metadata["subset_indices_hash"],
+                    metadata["problem"],
+                    metadata["family"],
+                    metadata["training_size"],
+                    metadata["offline_seed"],
+                    objective,
+                )
+                if key in existing:
+                    continue
+                row = dict(metadata)
+                row.update({
+                    "objective": objective,
+                    "m": float(params["m"][objective]),
+                    "tau2": float(params["tau2"][objective]),
+                    "c": float(params["c"][objective]),
+                    "slope": float(params["slope"][objective]),
+                    "s2max": float(params["s2max"][objective]),
+                    "signal": bool(params["signal"][objective]),
+                })
+                writer.writerow(row)
+            handle.flush()
+            os.fsync(handle.fileno())
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _cached_ebu_survival(
+    output_dir,
+    spec,
+    data,
+    problem_name,
+    training_size,
+    offline_seed,
+):
+    from src.experiment import make_survival
+
+    metadata = _ebu_cache_metadata(
+        spec, data, problem_name, training_size, offline_seed
+    )
+    cache_path = _ebu_cache_path(output_dir, metadata)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = cache_path.with_suffix(cache_path.suffix + ".lock")
+    started = time.perf_counter()
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            cached = None
+            if cache_path.is_file():
+                try:
+                    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+                    if payload.get("metadata") == metadata:
+                        cached = payload.get("params")
+                except (OSError, ValueError, TypeError):
+                    cached = None
+            if cached is None:
+                survival = make_survival(
+                    "ebu_dr",
+                    _oof_model_factory(spec),
+                    data["X_train"],
+                    data["y_train"],
+                    seed=int(offline_seed),
+                    n_folds=metadata["n_folds"],
+                    tau2_rule=str(EBU_DR_CONFIG.get("tau2_rule", "floor")),
+                    c_rule=str(EBU_DR_CONFIG.get("c_rule", "dispersion")),
+                )
+                params = survival.eb_params
+                payload = {
+                    "metadata": metadata,
+                    "params": _json_ebu_params(params),
+                }
+                temporary = cache_path.with_name(
+                    f"{cache_path.name}.tmp.{os.getpid()}"
+                )
+                temporary.write_text(
+                    json.dumps(payload, indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+                os.replace(temporary, cache_path)
+            else:
+                params = {
+                    name: np.asarray(values, dtype=(bool if name == "signal" else float))
+                    for name, values in cached.items()
+                }
+                survival = make_survival(
+                    "ebu_dr",
+                    _oof_model_factory(spec),
+                    data["X_train"],
+                    data["y_train"],
+                    seed=int(offline_seed),
+                    eb_params=params,
+                )
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    _write_ebu_params_table(output_dir, metadata, survival.eb_params)
+    return survival, time.perf_counter() - started
+
+
+def _survival(
+    spec,
+    models_pair,
+    data,
+    *,
+    output_dir=None,
+    problem_name=None,
+    training_size=None,
+    offline_seed=None,
+):
+    from src.survival import Survival_dr, Survival_standard
     from src.uncertainty import gaussian_upper_scale
 
-    if not spec.dual_ranking:
-        return Survival_standard()
+    if spec.category in {"normal", "hidden"}:
+        return Survival_standard(), 0.0
+    if spec.category == "ebu_dr":
+        return _cached_ebu_survival(
+            output_dir,
+            spec,
+            data,
+            problem_name,
+            training_size,
+            offline_seed,
+        )
+    if spec.category != "dr":
+        raise ValueError(f"Unsupported primary method category: {spec.category}")
 
     if spec.family in {"gpr_rbf", "gpr_matern"}:
-        return Survival_dual_ranking(
-            alphas=[gaussian_upper_scale(DUAL_RANKING_QUANTILE)] * len(models_pair),
-        )
+        return Survival_dr(
+            alphas=[gaussian_upper_scale(DR_QUANTILE)] * len(models_pair),
+        ), 0.0
 
-    quantile = float(DUAL_RANKING_QUANTILE)
+    quantile = float(DR_QUANTILE)
     if quantile not in {0.8, 0.9, 0.95}:
-        raise ValueError("dual_ranking_quantile must be one of 0.8, 0.9, 0.95.")
+        raise ValueError("DR quantile must be one of 0.8, 0.9, 0.95.")
     if spec.family not in {"qr", "bnn"}:
-        raise ValueError(f"Unsupported dual-ranking family: {spec.family}")
-    return Survival_dual_ranking(alpha=quantile)
+        raise ValueError(f"Unsupported DR family: {spec.family}")
+    return Survival_dr(alpha=quantile), 0.0
 
 
 def optimization_initial_population(x_train, population_size, optimization_seed):
@@ -496,7 +774,16 @@ def _run_predictor_group(
         objective_values,
         fallback_reference_values=data.get("igd_reference_values"),
     )
-    survival = _survival(spec, pair, data)
+    survival, survival_training_time = _survival(
+        spec,
+        pair,
+        data,
+        output_dir=output_dir,
+        problem_name=problem_name,
+        training_size=training_size,
+        offline_seed=lhs_seed,
+    )
+    training_time += survival_training_time
     rows = []
     # The trained surrogate is shared; optimizer failures are recorded per seed.
     for opt_seed in opt_seeds:

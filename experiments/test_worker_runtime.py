@@ -56,6 +56,22 @@ class WorkerRuntimeTests(unittest.TestCase):
                 source = path.read_text(encoding="utf-8")
                 self.assertIn("initializer=initialize_worker_threads", source)
                 self.assertIn("initargs=(1,)", source)
+                self.assertIn('get_context("spawn")', source)
+
+    def test_initializer_does_not_import_torch_for_non_torch_workers(self):
+        original = {name: os.environ.get(name) for name in THREAD_ENVIRONMENT_VARIABLES}
+        try:
+            with patch.dict(sys.modules, {"torch": None}):
+                initialize_worker_threads(1)
+            self.assertTrue(
+                all(os.environ[name] == "1" for name in THREAD_ENVIRONMENT_VARIABLES)
+            )
+        finally:
+            for name, value in original.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
     def test_only_known_offline_moo_optional_warnings_are_suppressed(self):
         with warnings.catch_warnings(record=True) as captured:

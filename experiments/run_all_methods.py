@@ -30,7 +30,10 @@ from experiments.project_environment import (  # noqa: E402
 )
 from experiments.method_registry import (  # noqa: E402
     DEFAULT_DISABLED_METHODS,
+    DR_METHODS,
+    EBU_DR_METHODS,
     METHOD_REGISTRY,
+    NORMAL_METHODS,
 )
 
 
@@ -47,10 +50,13 @@ ALL_METHODS = tuple(
     method for methods in METHOD_GROUPS.values() for method in methods
 )
 DEFAULT_METHODS = ALL_METHODS
+PRIMARY_METHOD_GROUPS = {
+    "normal": NORMAL_METHODS,
+    "dr": DR_METHODS,
+    "ebu_dr": EBU_DR_METHODS,
+}
 PRIMARY_EXPERIMENT_METHODS = tuple(
-    method
-    for method in MAIN_METHODS
-    if METHOD_REGISTRY[method].family in {"gpr_rbf", "gpr_matern", "qr", "bnn"}
+    method for methods in PRIMARY_METHOD_GROUPS.values() for method in methods
 )
 MAIN_BASELINE_METHODS = (
     "TGPR-MO",
@@ -365,7 +371,9 @@ def main(argv=None):
     args = parse_args(argv)
     if args.list_methods:
         for group, methods in (
-            ("primary methods", PRIMARY_EXPERIMENT_METHODS),
+            ("normal", NORMAL_METHODS),
+            ("dr", DR_METHODS),
+            ("ebu_dr", EBU_DR_METHODS),
             ("baselines", BASELINE_EXPERIMENT_METHODS),
         ):
             print(f"{group} ({len(methods)}):")

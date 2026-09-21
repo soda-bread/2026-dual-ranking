@@ -14,7 +14,12 @@ from pymoo.termination import get_termination
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from pymoo.util.ref_dirs import get_reference_directions
 from pymoo.util.misc import from_dict
-from src.survival import Survival_standard 
+from src.survival import (
+    Survival_dr,
+    Survival_eb_shrinkage,
+    Survival_scaled_pessimism,
+    Survival_standard,
+)
 from src.opt_problem import Benchmark_Problem, EvaluatePreRealCallback, evaluate_pre_real
 from src.offline_moo_adapter import (
     evaluate_offline_moo_objectives_and_feasibility,
@@ -23,6 +28,83 @@ from src.offline_moo_adapter import (
 )
 from src.metrics import normalize_objectives
 from src.evolution import polynomial_mutation
+
+
+def make_survival(
+    method,
+    model_factory=None,
+    X=None,
+    y=None,
+    seed=0,
+    beta=0.90,
+    n_obj=None,
+    *,
+    n_folds=5,
+    tau2_rule="floor",
+    c_rule="dispersion",
+    eb_params=None,
+):
+    """Construct a formal primary-method survival operator by short name."""
+
+    from src.uncertainty import (
+        cv_oof_predictions,
+        cv_weakness,
+        eb_shrinkage_params,
+        gaussian_upper_scale,
+    )
+
+    method = str(method).strip().lower().replace("-", "_")
+    if method == "standard":
+        return Survival_standard()
+    if method in {"dr", "dr_concat"}:
+        if n_obj is None:
+            if y is None:
+                raise ValueError("n_obj or y is required for DR survival.")
+            n_obj = np.asarray(y).shape[1]
+        return Survival_dr(
+            alphas=[gaussian_upper_scale(beta)] * int(n_obj)
+        )
+    if method not in {"f2_po", "ebu_dr"}:
+        raise ValueError(f"Unknown primary survival method: {method}")
+    if model_factory is None or X is None or y is None:
+        raise ValueError(f"{method} requires model_factory, X, and y.")
+
+    oof_mean = oof_std = fold_ids = None
+    if eb_params is None:
+        oof_mean, oof_std, fold_ids, _ = cv_oof_predictions(
+            model_factory, X, y, n_folds=n_folds, seed=seed
+        )
+    if method == "f2_po":
+        if oof_mean is None:
+            raise ValueError("f2_po does not accept precomputed EB parameters.")
+        weights = cv_weakness(oof_mean, y, fold_ids)[1]
+        return Survival_scaled_pessimism(weights)
+
+    if eb_params is None:
+        values = eb_shrinkage_params(
+            oof_mean,
+            oof_std,
+            y,
+            fold_ids,
+            tau2_rule=tau2_rule,
+            c_rule=c_rule,
+        )
+        m, tau2, c, slope, s2max, signal = values
+    else:
+        m, tau2, c, slope, s2max, signal = (
+            np.asarray(eb_params[name])
+            for name in ("m", "tau2", "c", "slope", "s2max", "signal")
+        )
+    survival = Survival_eb_shrinkage(m, tau2, c, s2max, signal)
+    survival.eb_params = {
+        "m": np.asarray(m, dtype=float),
+        "tau2": np.asarray(tau2, dtype=float),
+        "c": np.asarray(c, dtype=float),
+        "slope": np.asarray(slope, dtype=float),
+        "s2max": np.asarray(s2max, dtype=float),
+        "signal": np.asarray(signal, dtype=bool),
+    }
+    return survival
 
 
 class BroadcastConstraintsAsPenalty(ConstraintsAsPenalty):

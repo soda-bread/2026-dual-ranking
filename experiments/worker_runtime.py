@@ -39,12 +39,17 @@ def set_worker_thread_environment(num_threads: int = 1) -> None:
 
 
 def initialize_worker_threads(num_threads: int = 1) -> None:
-    """Initialize one worker and cap both native and Torch thread pools."""
+    """Initialize one worker and cap native and already-loaded Torch pools.
+
+    Do not import PyTorch solely to configure it.  Most main-runner methods do
+    not use PyTorch, and eagerly loading it in every process wastes a material
+    amount of memory when dozens of workers are active.  A later PyTorch import
+    still observes the native thread environment configured below.
+    """
 
     set_worker_thread_environment(num_threads)
-    try:
-        import torch
-    except ImportError:
+    torch = sys.modules.get("torch")
+    if torch is None:
         return
     torch.set_num_threads(int(num_threads))
     try:

@@ -10,16 +10,16 @@ from experiments.project_environment import PROJECT_PYTHON
 
 class UnifiedDispatcherTest(unittest.TestCase):
     def test_molecule_dependencies_follow_problem_selection(self):
-        self.assertTrue(project_environment._includes_molecule(None))
+        self.assertFalse(project_environment._includes_molecule(None))
         self.assertTrue(project_environment._includes_molecule("zdt1,molecule"))
         self.assertFalse(project_environment._includes_molecule("zdt1,re21"))
 
-    def test_unified_registry_contains_only_the_18_experiment_methods(self):
-        self.assertEqual(len(run_all_methods.ALL_METHODS), 18)
-        self.assertEqual(len(set(run_all_methods.ALL_METHODS)), 18)
+    def test_unified_registry_contains_only_the_22_experiment_methods(self):
+        self.assertEqual(len(run_all_methods.ALL_METHODS), 22)
+        self.assertEqual(len(set(run_all_methods.ALL_METHODS)), 22)
         self.assertEqual(
             {key: len(value) for key, value in run_all_methods.METHOD_GROUPS.items()},
-            {"main": 12, "dl_mobo": 4, "generative": 2},
+            {"main": 16, "dl_mobo": 4, "generative": 2},
         )
         self.assertTrue(
             set(run_all_methods.ALL_METHODS).isdisjoint(
@@ -31,16 +31,28 @@ class UnifiedDispatcherTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             run_all_methods.parse_args(["--dry-run"])
 
-    def test_two_experiment_groups_partition_the_18_active_methods(self):
+    def test_two_experiment_groups_partition_the_22_active_methods(self):
         primary = set(run_all_methods.PRIMARY_EXPERIMENT_METHODS)
         baselines = set(run_all_methods.BASELINE_EXPERIMENT_METHODS)
-        self.assertEqual(len(primary), 8)
+        self.assertEqual(len(primary), 12)
         self.assertEqual(len(baselines), 10)
         self.assertTrue(primary.isdisjoint(baselines))
         self.assertEqual(primary | baselines, set(run_all_methods.DEFAULT_METHODS))
         self.assertEqual(
             set(run_all_methods.MAIN_BASELINE_METHODS),
             {"TGPR-MO", "DDMOEA-GAN", "Prob-RVEA", "Prob-MOEA/D"},
+        )
+
+    def test_primary_categories_are_normal_dr_and_ebu_dr(self):
+        self.assertEqual(
+            set(run_all_methods.PRIMARY_METHOD_GROUPS),
+            {"normal", "dr", "ebu_dr"},
+        )
+        self.assertTrue(
+            all(
+                len(methods) == 4
+                for methods in run_all_methods.PRIMARY_METHOD_GROUPS.values()
+            )
         )
 
     @patch("experiments.run_all_methods.main")

@@ -28,7 +28,8 @@ problem_names:
   - re36
   - re37
   - mo-portfolio
-  - molecule
+  # molecule is temporarily excluded from default runs; use
+  # --problems molecule to run it explicitly.
 
 n_gen: 100
 pop_size: 100
@@ -68,7 +69,14 @@ sample_sizes_by_problem:
   mo-portfolio: 100
   molecule: 100
 show_seed_output: False
-dual_ranking_quantile: 0.90
+dr_quantile: 0.90
+
+ebu_dr:
+  n_folds: 5
+  tau2_rule: floor
+  c_rule: dispersion
+  view: concat
+  uninformative: sigma
 
 # DDMOEA/GAN keeps the mechanisms of Algorithms 1/2. Eq. (10) is applied after
 # shifting each objective origin one observed span below its observed minimum,

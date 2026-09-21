@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import gc
+import multiprocessing as mp
 import os
 import sys
 import itertools
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +35,8 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 from sample_size_common import (
     LHS_SEEDS, METHOD_REGISTRY, OPT_SEEDS, PROBLEMS, TRAIN_SIZES, TEST_SIZE,
-    append_rows, cleanup_model_storage, load_config_file, organize_cache_files,
+    append_rows, cleanup_model_storage, configure_method_settings,
+    load_config_file, organize_cache_files,
     current_protocol_version, read_result_rows, reconcile_result_csvs,
     result_optimizer_settings, result_protocol_version, run_group,
     valid_success, write_manifest,
@@ -93,6 +96,8 @@ def parse_args(argv=None):
                         help="optimizer population size (exposed for smoke testing)")
     args = parser.parse_args(argv)
     root_config = load_config_file(args.config)
+    configure_method_settings(root_config)
+    args.root_config = root_config
     config = root_config.get("sample_size_ablation", {})
     args.dataset_source = (
         args.dataset_source
@@ -258,7 +263,9 @@ def _execute(payload):
         dataset_source,
         subset_cache_dir,
         all_sample_sizes,
+        root_config,
     ) = payload
+    configure_method_settings(root_config)
     log_path = group_log_path(output_dir, problem, size, lhs_seed, method)
     with redirect_process_output(log_path) as log_handle:
         print(
@@ -269,7 +276,7 @@ def _execute(payload):
             flush=True,
         )
         try:
-            return run_group(
+            result = run_group(
                 Path(output_dir),
                 problem,
                 size,
@@ -282,6 +289,15 @@ def _execute(payload):
                 subset_cache_root=Path(subset_cache_dir),
                 all_sample_sizes=all_sample_sizes,
             )
+            rows = result[0]
+            success_count = sum(row.get("status") == "success" for row in rows)
+            print(
+                f"=== worker completed | success={success_count} | "
+                f"failed={len(rows) - success_count} ===",
+                file=log_handle,
+                flush=True,
+            )
+            return result
         except Exception:
             _release_worker_memory()
             raise
@@ -358,6 +374,7 @@ def main(argv=None):
             args.dataset_source,
             str(args.subset_cache_dir),
             tuple(args.train_sizes),
+            args.root_config,
         )
         for group in groups
     ]
@@ -397,20 +414,46 @@ def main(argv=None):
                     _release_worker_memory()
             continue
 
-        with ProcessPoolExecutor(
-            max_workers=method_workers,
-            initializer=initialize_worker_threads,
-            initargs=(1,),
-        ) as executor:
-            future_labels = {}
-            for payload in method_payloads:
-                future = executor.submit(_execute_sequence, (payload,))
-                future_labels[future] = (
-                    f"{payload[1]} | N={payload[2]} | "
-                    f"offline_seed={payload[3]} | {method}"
-                )
-            for future in as_completed(future_labels):
-                record_progress(future.result(), future_labels[future], write_results=False)
+        context = mp.get_context("spawn")
+        active_label = "not-yet-reported task"
+        try:
+            with ProcessPoolExecutor(
+                max_workers=method_workers,
+                mp_context=context,
+                initializer=initialize_worker_threads,
+                initargs=(1,),
+            ) as executor:
+                future_labels = {}
+                for payload in method_payloads:
+                    future = executor.submit(_execute_sequence, (payload,))
+                    future_labels[future] = (
+                        f"{payload[1]} | N={payload[2]} | "
+                        f"offline_seed={payload[3]} | {method}"
+                    )
+                for future in as_completed(future_labels):
+                    active_label = future_labels[future]
+                    record_progress(
+                        future.result(),
+                        active_label,
+                        write_results=False,
+                    )
+        except BrokenProcessPool:
+            print(
+                "[worker-pool-failed] A worker exited without a Python "
+                f"exception while processing the {method} stage "
+                f"(observed while waiting for: {active_label}).",
+                file=sys.stderr,
+                flush=True,
+            )
+            print(
+                "Completed CSV rows were already saved. Check the matching "
+                f"{args.output_dir / 'logs'}/*.log and the SLURM job's "
+                "MaxRSS/OUT_OF_MEMORY status, then rerun the same command "
+                "with --resume. If SLURM reports OOM, reduce --max-workers.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 2
     summarize(args.output_dir, args.output_dir)
     progress.complete(args.output_dir)
     return 0

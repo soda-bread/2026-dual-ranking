@@ -245,6 +245,23 @@ def autogluon_qr_predict(model, X):
     return pred
 
 
+def qr_prediction_mean_std(prediction):
+    """Convert a QR prediction frame to median and q90-based std proxy."""
+
+    from src.uncertainty import gaussian_upper_scale
+
+    mean = np.asarray(prediction["y_q0.5"], dtype=float).reshape(-1)
+    q90 = np.asarray(prediction["y_q0.9"], dtype=float).reshape(-1)
+    std = np.maximum(q90 - mean, 0.0) / gaussian_upper_scale(0.90)
+    return mean, std
+
+
+def autogluon_qr_mean_std(model, X):
+    """Return QR median and a non-negative q90-based std proxy."""
+
+    return qr_prediction_mean_std(autogluon_qr_predict(model, X))
+
+
 def autogluon_qr_pred_mean_quantiles(model_f1, model_f2, X_test, verbose=True):
     pred_y1 = autogluon_qr_predict(model_f1, X_test)
     pred_y2 = autogluon_qr_predict(model_f2, X_test)

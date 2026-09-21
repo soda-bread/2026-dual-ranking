@@ -30,13 +30,22 @@ problem_names:
   - re36
   - re37
   - mo-portfolio
-  - molecule
+  # molecule is temporarily excluded from default runs because its oracle
+  # loads large RDKit/Chemprop model assets in every worker. It remains
+  # available explicitly through --problems molecule.
 
 # Optimizer settings.  pop_size=100 is independent of the offline sample sizes.
 n_gen: 100
 pop_size: 100
 
-dual_ranking_quantile: 0.90
+dr_quantile: 0.90
+
+ebu_dr:
+  n_folds: 5
+  tau2_rule: floor
+  c_rule: dispersion
+  view: concat
+  uninformative: sigma
 
 sample_size_ablation:
   dataset_source: official_pool
