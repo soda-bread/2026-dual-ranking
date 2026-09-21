@@ -34,13 +34,21 @@ def _as_objective_matrix(values, name):
 
 
 def _positive_part(estimate, se):
-    """Return the one-standard-error positive part of an estimate."""
+    """Positive-part James-Stein estimate of a non-negative quantity.
+
+    The part of ``estimate`` within one standard error of zero is removed,
+    while a clearly positive estimate is left almost unchanged.
+    """
 
     estimate = float(estimate)
     se = float(se)
     if not np.isfinite(estimate) or not np.isfinite(se) or se < 0:
         raise ValueError("estimate and standard error must be finite; se >= 0.")
-    return max(estimate - se, 0.0)
+    if not estimate > 0:
+        return 0.0
+    if se > 0:
+        estimate *= max(0.0, 1.0 - se**2 / estimate**2)
+    return estimate
 
 
 def _mean_and_standard_deviation(prediction, residual_rms):
@@ -180,6 +188,9 @@ def eb_shrinkage_params(
         )
 
     n = len(y)
+    dof = n - len(np.unique(fold_ids))
+    if dof <= 0:
+        raise ValueError("OOF moments require more rows than folds.")
     m = y.mean(axis=0)
     tau2 = np.empty(y.shape[1], dtype=float)
     c = np.empty(y.shape[1], dtype=float)
@@ -191,10 +202,10 @@ def eb_shrinkage_params(
         p = prediction_centered[:, objective_index]
         target = target_centered[:, objective_index]
         covariance_samples = p * target
-        covariance = float(np.mean(covariance_samples))
+        covariance = float(np.sum(covariance_samples)) / dof
         se_covariance = float(np.std(covariance_samples, ddof=1) / np.sqrt(n))
-        prediction_variance = float(np.mean(p**2))
-        target_variance = float(np.mean(target**2))
+        prediction_variance = float(np.sum(p**2)) / dof
+        target_variance = float(np.sum(target**2)) / dof
         floor = 1e-12 * max(target_variance, np.finfo(float).tiny)
         signal[objective_index] = covariance > se_covariance
         if tau2_rule == "floor":
@@ -203,18 +214,24 @@ def eb_shrinkage_params(
             tau2[objective_index] = max(
                 _positive_part(covariance, se_covariance), floor
             )
-        slope[objective_index] = covariance / max(
-            prediction_variance, np.finfo(float).tiny
+        slope[objective_index] = (
+            covariance / prediction_variance
+            if prediction_variance > 0
+            else np.nan
         )
 
         sigma2_mean = float(np.mean(oof_std[:, objective_index] ** 2))
         if c_rule == "dispersion":
             excess_samples = p**2 - p * target
-            excess = float(np.mean(excess_samples))
+            excess = float(np.sum(excess_samples)) / dof
             se_excess = float(np.std(excess_samples, ddof=1) / np.sqrt(n))
             numerator = _positive_part(excess, se_excess)
         else:
-            numerator = float(np.mean((p - target) ** 2))
+            numerator = float(
+                np.mean(
+                    (y[:, objective_index] - oof_mean[:, objective_index]) ** 2
+                )
+            )
         c[objective_index] = numerator / max(
             sigma2_mean, np.finfo(float).tiny
         )

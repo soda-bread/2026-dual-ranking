@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import unittest
 import sys
+import csv
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,7 +15,11 @@ if str(EXPERIMENTS_DIR) not in sys.path:
     sys.path.insert(0, str(EXPERIMENTS_DIR))
 
 from experiments import run_all
-from sample_size_common import current_protocol_version
+from sample_size_common import (
+    RESULT_FIELDS,
+    current_protocol_version,
+    reconcile_result_csvs,
+)
 
 
 class MainRunnerResumeTests(unittest.TestCase):
@@ -67,6 +73,35 @@ class MainRunnerResumeTests(unittest.TestCase):
 
         self.assertEqual(skipped, 1)
         self.assertEqual(groups, [])
+
+    def test_reconcile_keeps_only_current_protocol_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            csv_dir = output_dir / "csv"
+            csv_dir.mkdir()
+            current = self._row("success")
+            current["method"] = "GPR-RBF + NSGA-II"
+            current["protocol_version"] = current_protocol_version(
+                "official_pool", current["method"]
+            )
+            old = dict(current, protocol_version="old-rank-and-crowd-protocol")
+            path = csv_dir / "exp1_results.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=RESULT_FIELDS)
+                writer.writeheader()
+                writer.writerow({name: old.get(name, "") for name in RESULT_FIELDS})
+                writer.writerow(
+                    {name: current.get(name, "") for name in RESULT_FIELDS}
+                )
+
+            reconcile_result_csvs(output_dir)
+
+            with path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(
+                rows[0]["protocol_version"], current["protocol_version"]
+            )
 
 
 if __name__ == "__main__":

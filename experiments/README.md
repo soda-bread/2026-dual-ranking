@@ -151,6 +151,14 @@ changing N, the subset, or the configuration forces parameter refitting.
 `ebu_dr_params.csv` records `m`, `tau2`, `c`, `slope`, `s2max`, and `signal`
 for every objective.
 
+The current EBU-DR v2 estimator uses the positive-part James-Stein correction
+and fold-centered moments with `N - K` degrees of freedom. The shared
+rank-and-crowding protocol is also versioned as v2. Results produced before
+these versions are not resumed; once a current replacement row is written for
+the same experiment identity, the superseded raw CSV row is removed. Thus the
+normal, DR, and EBU-DR categories must all be regenerated under the current
+protocol before making a combined comparison.
+
 After the three primary categories finish, create the paired per-cell Cliff's
 delta table and aggregate one-sided Wilcoxon table with:
 

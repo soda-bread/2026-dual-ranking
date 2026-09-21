@@ -17,8 +17,13 @@ from pymoo.optimize import minimize
 from experiments.method_registry import MethodSpec
 from experiments.sample_size_common import _cached_ebu_survival
 from src.models import qr_prediction_mean_std
-from src.survival import Survival_eb_shrinkage, Survival_standard
-from src.uncertainty import cv_oof_predictions, eb_shrinkage_params
+from src.survival import (
+    Survival_dr,
+    Survival_eb_shrinkage,
+    Survival_scaled_pessimism,
+    Survival_standard,
+)
+from src.uncertainty import _positive_part, cv_oof_predictions, eb_shrinkage_params
 
 
 class _LinearUncertaintyModel:
@@ -44,6 +49,15 @@ def _factory(objective_index, fold_index, fold_seed):
 
 
 class EBUEstimatorTests(unittest.TestCase):
+    def test_positive_part_is_james_stein(self):
+        self.assertAlmostEqual(
+            _positive_part(1.3, 0.15),
+            1.3 * (1 - 0.15**2 / 1.3**2),
+        )
+        self.assertEqual(_positive_part(0.10, 0.15), 0.0)
+        self.assertEqual(_positive_part(-0.2, 0.05), 0.0)
+        self.assertEqual(_positive_part(0.7, 0.0), 0.7)
+
     def test_oof_split_and_predictions_are_deterministic(self):
         rng = np.random.default_rng(4)
         X = rng.normal(size=(30, 2))
@@ -107,11 +121,23 @@ class EBUEstimatorTests(unittest.TestCase):
         prediction = np.empty_like(y)
         for fold in np.unique(folds):
             prediction[folds == fold] = y[folds == fold].mean(axis=0)
-        *_, c, _, _, signal = eb_shrinkage_params(
+        _, _, c, _, _, signal = eb_shrinkage_params(
             prediction, np.ones_like(y), y, folds
         )
         self.assertFalse(bool(signal[0]))
         self.assertAlmostEqual(float(c[0]), 0.0, places=12)
+
+    def test_calibrated_rule_uses_raw_oof_residual(self):
+        y = np.array([[0.0], [1.0], [10.0], [11.0]])
+        prediction = y + 5.0
+        _, _, c, *_ = eb_shrinkage_params(
+            prediction,
+            np.ones_like(y),
+            y,
+            np.array([0, 0, 1, 1]),
+            c_rule="calibrated",
+        )
+        self.assertAlmostEqual(float(c[0]), 25.0)
 
     def test_qr_std_proxy_is_nonnegative_under_quantile_crossing(self):
         prediction = pd.DataFrame(
@@ -243,6 +269,44 @@ class EBUSurvivalTests(unittest.TestCase):
         )
         np.testing.assert_allclose(standard.pop.get("X"), ebu.pop.get("X"))
         np.testing.assert_allclose(standard.pop.get("F"), ebu.pop.get("F"))
+
+
+class F2POSurvivalTests(unittest.TestCase):
+    def setUp(self):
+        rng = np.random.default_rng(29)
+        self.F = rng.normal(size=(40, 2))
+        self.std = rng.uniform(0.1, 0.8, size=(40, 2))
+        self.alphas = np.array([0.8, 1.2])
+
+    def _select(self, survival, n_survive=20):
+        population = Population.new(F=self.F, std=self.std)
+        return survival._do(
+            None,
+            population,
+            n_survive=n_survive,
+            random_state=np.random.RandomState(14),
+        )
+
+    def test_zero_weights_match_standard(self):
+        standard = self._select(Survival_standard())
+        f2_po = self._select(
+            Survival_scaled_pessimism([0.0, 0.0], alphas=self.alphas)
+        )
+        np.testing.assert_allclose(standard.get("F"), f2_po.get("F"))
+
+    def test_unit_weights_match_dr(self):
+        dr = self._select(Survival_dr(alphas=self.alphas))
+        f2_po = self._select(
+            Survival_scaled_pessimism([1.0, 1.0], alphas=self.alphas)
+        )
+        np.testing.assert_allclose(dr.get("F"), f2_po.get("F"))
+
+    def test_n_survive_is_exact(self):
+        selected = self._select(
+            Survival_scaled_pessimism([0.4, 0.6], alphas=self.alphas),
+            n_survive=11,
+        )
+        self.assertEqual(len(selected), 11)
 
 
 class EBUCacheTests(unittest.TestCase):

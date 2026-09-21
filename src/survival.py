@@ -224,22 +224,54 @@ class Survival_eb_shrinkage(Survival):
 
 
 class Survival_scaled_pessimism(Survival):
-    """F2-PO comparison operator retained for analysis-only experiments."""
+    """F2-PO dual-view ranking with objective-wise CV weakness scaling."""
 
-    def __init__(self, weights, nds=None, crowding_func="cd"):
+    def __init__(
+        self,
+        weights,
+        *,
+        alphas=None,
+        alpha=None,
+        nds=None,
+        crowding_func="cd",
+    ):
         super().__init__(filter_infeasible=True)
-        self.weights = np.asarray(weights, dtype=float).reshape(-1)
+        self.weights = np.clip(
+            np.asarray(weights, dtype=float).reshape(-1), 0.0, 1.0
+        )
+        if (alphas is None) == (alpha is None):
+            raise ValueError(
+                "Provide exactly one of alphas (Gaussian) or alpha (quantile)."
+            )
+        self.alphas = (
+            None if alphas is None else np.asarray(alphas, dtype=float).reshape(-1)
+        )
+        self.alpha = alpha
         self.nds = nds if nds is not None else NonDominatedSorting()
         self.crowding_func = get_crowding_function(crowding_func)
 
     def _do(self, problem, pop, *args, random_state=None, n_survive=None, **kwargs):
         F = pop.get("F").astype(float, copy=False)
-        std = pop.get("std").astype(float, copy=False)
         if self.weights.shape != (F.shape[1],):
             raise ValueError("weights must contain one value per objective.")
+        if self.alpha is not None:
+            column = {0.8: "F_q80", 0.9: "F_q90", 0.95: "F_q95"}.get(
+                self.alpha
+            )
+            if column is None:
+                raise ValueError("alpha must be one of 0.8, 0.9, 0.95.")
+            F_upper = pop.get(column).astype(float, copy=False)
+        else:
+            if self.alphas.shape != (F.shape[1],):
+                raise ValueError("alphas must contain one value per objective.")
+            std = pop.get("std").astype(float, copy=False)
+            F_upper = F + self.alphas[None, :] * std
+        if F_upper.shape != F.shape or not np.all(np.isfinite(F_upper)):
+            raise ValueError("F2-PO upper predictions must be finite and match F.")
+        F_pessimistic = F + self.weights[None, :] * (F_upper - F)
         return _rank_and_crowd(
             pop,
-            F + self.weights[None, :] * std,
+            np.concatenate([F, F_pessimistic], axis=1),
             F,
             n_survive,
             random_state,

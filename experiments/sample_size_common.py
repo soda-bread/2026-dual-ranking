@@ -53,8 +53,8 @@ TEST_SIZE = 100
 LHS_PROTOCOL_VERSION = "lhs_full_offline_native_quantile_v6"
 OFFICIAL_PROTOCOL_VERSION = "official_pool_full_offline_native_quantile_v10"
 PYMOO_MUTATION_PROTOCOL_VERSION = "pm_individual1_variable1overd_v1"
-RANK_AND_CROWD_PROTOCOL_VERSION = "shared_rank_crowd_break_v1"
-EBU_DR_PROTOCOL_VERSION = "ebu_dr_three_regime_v1"
+RANK_AND_CROWD_PROTOCOL_VERSION = "shared_rank_crowd_break_v2"
+EBU_DR_PROTOCOL_VERSION = "ebu_dr_three_regime_v2"
 
 
 def current_protocol_version(dataset_source, method=None):
@@ -1176,6 +1176,45 @@ def _result_key(row: dict) -> tuple:
     )
 
 
+def _logical_result_key(row: dict) -> tuple:
+    """Result identity without protocol, used to retire superseded rows."""
+
+    configured_n_gen, configured_pop_size = result_optimizer_settings(row)
+    return (
+        str(row.get("dataset_source") or "lhs"),
+        configured_n_gen,
+        configured_pop_size,
+        str(row["problem"]),
+        str(row["method"]),
+        int(row["training_size"]),
+        int(row["lhs_seed"]),
+        int(row["opt_seed"]),
+    )
+
+
+def _is_current_protocol_row(row: dict) -> bool:
+    method = str(row.get("method") or "")
+    if method not in METHOD_REGISTRY:
+        return False
+    source = str(row.get("dataset_source") or "lhs")
+    return result_protocol_version(row) == current_protocol_version(source, method)
+
+
+def _drop_superseded_protocol_rows(rows: Iterable[dict]) -> list[dict]:
+    """Drop stale rows only when the same logical run has a current row."""
+
+    rows = list(rows)
+    current_keys = {
+        _logical_result_key(row) for row in rows if _is_current_protocol_row(row)
+    }
+    return [
+        row
+        for row in rows
+        if _logical_result_key(row) not in current_keys
+        or _is_current_protocol_row(row)
+    ]
+
+
 def append_rows(output_dir: Path, rows: Iterable[dict]) -> int:
     """Append missing completed rows, safely and without duplicate successes."""
     output_dir = Path(output_dir)
@@ -1195,6 +1234,20 @@ def append_rows(output_dir: Path, rows: Iterable[dict]) -> int:
                 reader = csv.DictReader(handle)
                 existing_rows = list(reader)
                 existing_fields = tuple(reader.fieldnames or ())
+                pending_current_keys = {
+                    _logical_result_key(row)
+                    for row in pending_rows
+                    if _is_current_protocol_row(row)
+                }
+                retained_rows = [
+                    row
+                    for row in existing_rows
+                    if _logical_result_key(row) not in pending_current_keys
+                    or _is_current_protocol_row(row)
+                ]
+                protocols_pruned = len(retained_rows) != len(existing_rows)
+                if protocols_pruned:
+                    existing_rows = retained_rows
                 if existing_fields and existing_fields != RESULT_FIELDS:
                     # Upgrade legacy result files before appending the wider
                     # official-pool schema. Existing values are preserved and
@@ -1209,6 +1262,21 @@ def append_rows(output_dir: Path, rows: Iterable[dict]) -> int:
                     upgrade_writer.writeheader()
                     for existing in existing_rows:
                         upgrade_writer.writerow(
+                            {name: existing.get(name, "") for name in RESULT_FIELDS}
+                        )
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                elif protocols_pruned:
+                    handle.seek(0)
+                    handle.truncate()
+                    protocol_writer = csv.DictWriter(
+                        handle,
+                        fieldnames=RESULT_FIELDS,
+                        extrasaction="ignore",
+                    )
+                    protocol_writer.writeheader()
+                    for existing in existing_rows:
+                        protocol_writer.writerow(
                             {name: existing.get(name, "") for name in RESULT_FIELDS}
                         )
                     handle.flush()
@@ -1246,13 +1314,40 @@ def append_rows(output_dir: Path, rows: Iterable[dict]) -> int:
 
 
 def reconcile_result_csvs(output_dir: Path) -> int:
-    """Copy rows missing from legacy root CSV files into ``results/csv``."""
+    """Import legacy rows and remove superseded protocols when replacements exist."""
     output_dir = Path(output_dir)
     legacy_rows = []
     for path in sorted(output_dir.glob("exp*_results.csv")):
         with path.open(newline="", encoding="utf-8") as handle:
             legacy_rows.extend(csv.DictReader(handle))
-    return append_rows(output_dir, legacy_rows) if legacy_rows else 0
+    written = append_rows(output_dir, legacy_rows) if legacy_rows else 0
+    for path in sorted((output_dir / "csv").glob("exp*_results.csv")):
+        with path.open("a+", newline="", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                handle.seek(0)
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+                retained = _drop_superseded_protocol_rows(rows)
+                if len(retained) == len(rows):
+                    continue
+                handle.seek(0)
+                handle.truncate()
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=RESULT_FIELDS,
+                    extrasaction="ignore",
+                )
+                writer.writeheader()
+                for row in retained:
+                    writer.writerow(
+                        {name: row.get(name, "") for name in RESULT_FIELDS}
+                    )
+                handle.flush()
+                os.fsync(handle.fileno())
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    return written
 
 
 def organize_cache_files(output_dir: Path) -> None:

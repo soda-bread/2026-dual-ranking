@@ -42,13 +42,13 @@ def make_survival(
     n_folds=5,
     tau2_rule="floor",
     c_rule="dispersion",
+    quantile_family=False,
     eb_params=None,
 ):
     """Construct a formal primary-method survival operator by short name."""
 
     from src.uncertainty import (
         cv_oof_predictions,
-        cv_weakness,
         eb_shrinkage_params,
         gaussian_upper_scale,
     )
@@ -77,8 +77,17 @@ def make_survival(
     if method == "f2_po":
         if oof_mean is None:
             raise ValueError("f2_po does not accept precomputed EB parameters.")
-        weights = cv_weakness(oof_mean, y, fold_ids)[1]
-        return Survival_scaled_pessimism(weights)
+        y_array = np.asarray(y, dtype=float)
+        residual = np.mean((y_array - oof_mean) ** 2, axis=0)
+        weights = residual / np.maximum(
+            np.var(y_array, axis=0), np.finfo(float).tiny
+        )
+        if quantile_family:
+            return Survival_scaled_pessimism(weights, alpha=beta)
+        return Survival_scaled_pessimism(
+            weights,
+            alphas=[gaussian_upper_scale(beta)] * y_array.shape[1],
+        )
 
     if eb_params is None:
         values = eb_shrinkage_params(
