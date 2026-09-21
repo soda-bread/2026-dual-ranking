@@ -18,9 +18,7 @@ from experiments.method_registry import MethodSpec
 from experiments.sample_size_common import _cached_ebu_survival
 from src.models import qr_prediction_mean_std
 from src.survival import (
-    Survival_dr,
     Survival_eb_shrinkage,
-    Survival_scaled_pessimism,
     Survival_standard,
 )
 from src.uncertainty import _positive_part, cv_oof_predictions, eb_shrinkage_params
@@ -269,46 +267,6 @@ class EBUSurvivalTests(unittest.TestCase):
         )
         np.testing.assert_allclose(standard.pop.get("X"), ebu.pop.get("X"))
         np.testing.assert_allclose(standard.pop.get("F"), ebu.pop.get("F"))
-
-
-class F2POSurvivalTests(unittest.TestCase):
-    def setUp(self):
-        rng = np.random.default_rng(29)
-        self.F = rng.normal(size=(40, 2))
-        self.std = rng.uniform(0.1, 0.8, size=(40, 2))
-        self.alphas = np.array([0.8, 1.2])
-
-    def _select(self, survival, n_survive=20):
-        population = Population.new(F=self.F, std=self.std)
-        return survival._do(
-            None,
-            population,
-            n_survive=n_survive,
-            random_state=np.random.RandomState(14),
-        )
-
-    def test_zero_weights_match_standard(self):
-        standard = self._select(Survival_standard())
-        f2_po = self._select(
-            Survival_scaled_pessimism([0.0, 0.0], alphas=self.alphas)
-        )
-        np.testing.assert_allclose(standard.get("F"), f2_po.get("F"))
-
-    def test_unit_weights_match_dr(self):
-        dr = self._select(Survival_dr(alphas=self.alphas))
-        f2_po = self._select(
-            Survival_scaled_pessimism([1.0, 1.0], alphas=self.alphas)
-        )
-        np.testing.assert_allclose(dr.get("F"), f2_po.get("F"))
-
-    def test_n_survive_is_exact(self):
-        selected = self._select(
-            Survival_scaled_pessimism([0.4, 0.6], alphas=self.alphas),
-            n_survive=11,
-        )
-        self.assertEqual(len(selected), 11)
-
-
 class EBUCacheTests(unittest.TestCase):
     def test_cache_hit_does_not_refit_oof_models(self):
         rng = np.random.default_rng(13)

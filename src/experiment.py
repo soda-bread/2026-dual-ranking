@@ -17,7 +17,6 @@ from pymoo.util.misc import from_dict
 from src.survival import (
     Survival_dr,
     Survival_eb_shrinkage,
-    Survival_scaled_pessimism,
     Survival_standard,
 )
 from src.opt_problem import Benchmark_Problem, EvaluatePreRealCallback, evaluate_pre_real
@@ -42,7 +41,6 @@ def make_survival(
     n_folds=5,
     tau2_rule="floor",
     c_rule="dispersion",
-    quantile_family=False,
     eb_params=None,
 ):
     """Construct a formal primary-method survival operator by short name."""
@@ -64,29 +62,14 @@ def make_survival(
         return Survival_dr(
             alphas=[gaussian_upper_scale(beta)] * int(n_obj)
         )
-    if method not in {"f2_po", "ebu_dr"}:
+    if method != "ebu_dr":
         raise ValueError(f"Unknown primary survival method: {method}")
     if model_factory is None or X is None or y is None:
         raise ValueError(f"{method} requires model_factory, X, and y.")
 
-    oof_mean = oof_std = fold_ids = None
     if eb_params is None:
-        oof_mean, oof_std, fold_ids, _ = cv_oof_predictions(
+        oof_mean, oof_std, fold_ids = cv_oof_predictions(
             model_factory, X, y, n_folds=n_folds, seed=seed
-        )
-    if method == "f2_po":
-        if oof_mean is None:
-            raise ValueError("f2_po does not accept precomputed EB parameters.")
-        y_array = np.asarray(y, dtype=float)
-        residual = np.mean((y_array - oof_mean) ** 2, axis=0)
-        weights = residual / np.maximum(
-            np.var(y_array, axis=0), np.finfo(float).tiny
-        )
-        if quantile_family:
-            return Survival_scaled_pessimism(weights, alpha=beta)
-        return Survival_scaled_pessimism(
-            weights,
-            alphas=[gaussian_upper_scale(beta)] * y_array.shape[1],
         )
 
     if eb_params is None:

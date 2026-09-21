@@ -73,27 +73,6 @@ def _mean_and_standard_deviation(prediction, residual_rms):
     return mean, std
 
 
-def cv_weakness(oof_mean, y, fold_ids):
-    """Return fold-wise and aggregate normalized OOF prediction weakness."""
-
-    oof_mean = _as_objective_matrix(oof_mean, "oof_mean")
-    y = _as_objective_matrix(y, "y")
-    fold_ids = np.asarray(fold_ids, dtype=int).reshape(-1)
-    if oof_mean.shape != y.shape or len(fold_ids) != len(y):
-        raise ValueError("OOF predictions, targets, and fold ids must align.")
-    fold_values = []
-    for fold in np.unique(fold_ids):
-        selected = fold_ids == fold
-        target = y[selected]
-        prediction = oof_mean[selected]
-        centered = target - target.mean(axis=0, keepdims=True)
-        scale = np.mean(centered**2, axis=0)
-        scale = np.maximum(scale, np.finfo(float).tiny)
-        fold_values.append(np.mean((target - prediction) ** 2, axis=0) / scale)
-    fold_values = np.asarray(fold_values, dtype=float)
-    return fold_values, np.mean(fold_values, axis=0)
-
-
 def cv_oof_predictions(model_factory, X, y, n_folds=5, seed=0):
     """Fit deterministic K-fold models and return out-of-fold uncertainty.
 
@@ -148,8 +127,7 @@ def cv_oof_predictions(model_factory, X, y, n_folds=5, seed=0):
                 if callable(cleanup):
                     cleanup()
 
-    weakness = cv_weakness(oof_mean, y, fold_ids)[1]
-    return oof_mean, oof_std, fold_ids, weakness
+    return oof_mean, oof_std, fold_ids
 
 
 def eb_shrinkage_params(
