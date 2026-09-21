@@ -731,20 +731,19 @@ def _base_row(
     }
 
 
-def _run_predictor_group(
+def _prepare_predictor_group(
     output_dir,
     problem_name,
     training_size,
     lhs_seed,
     spec,
-    opt_seeds,
-    n_gen,
-    pop_size,
     dataset_source="lhs",
     subset_cache_root=None,
     all_sample_sizes=None,
 ):
-    from src.experiment import compute_surrogate_test_mse, run_experiment
+    """Train one final surrogate shared by normal, DR, and EBU-DR."""
+
+    from src.experiment import compute_surrogate_test_mse
     from src.metrics import get_igd_plus, get_metrics
     from src.opt_problem import build_problem
 
@@ -774,6 +773,50 @@ def _run_predictor_group(
         objective_values,
         fallback_reference_values=data.get("igd_reference_values"),
     )
+    return {
+        "data": data,
+        "problem": problem,
+        "pair": pair,
+        "use_surrogate": use_surrogate,
+        "training_time": training_time,
+        "model_seed": model_seed,
+        "mse_pre": mse_pre,
+        "hv": hv,
+        "obj_min": obj_min,
+        "obj_max": obj_max,
+        "normalized_ref_point": normalized_ref_point,
+        "igd_plus": igd_plus,
+        "igd_plus_source": igd_plus_source,
+    }
+
+
+def _run_prepared_predictor_method(
+    prepared,
+    output_dir,
+    problem_name,
+    training_size,
+    lhs_seed,
+    spec,
+    opt_seeds,
+    n_gen,
+    pop_size,
+    dataset_source="lhs",
+):
+    """Run one survival method against an already-trained final surrogate."""
+
+    from src.experiment import run_experiment
+
+    data = prepared["data"]
+    problem = prepared["problem"]
+    pair = prepared["pair"]
+    use_surrogate = prepared["use_surrogate"]
+    mse_pre = prepared["mse_pre"]
+    hv = prepared["hv"]
+    obj_min = prepared["obj_min"]
+    obj_max = prepared["obj_max"]
+    normalized_ref_point = prepared["normalized_ref_point"]
+    igd_plus = prepared["igd_plus"]
+    igd_plus_source = prepared["igd_plus_source"]
     survival, survival_training_time = _survival(
         spec,
         pair,
@@ -783,7 +826,8 @@ def _run_predictor_group(
         training_size=training_size,
         offline_seed=lhs_seed,
     )
-    training_time += survival_training_time
+    training_time = prepared["training_time"] + survival_training_time
+    model_seed = prepared["model_seed"]
     rows = []
     # The trained surrogate is shared; optimizer failures are recorded per seed.
     for opt_seed in opt_seeds:
@@ -873,6 +917,120 @@ def _run_predictor_group(
             row["error_message"] = f"{type(error).__name__}: {error}\n{traceback.format_exc()}"
         rows.append(row)
     return rows, pair
+
+
+def _run_predictor_family_group(
+    output_dir,
+    problem_name,
+    training_size,
+    lhs_seed,
+    method_opt_seeds,
+    n_gen,
+    pop_size,
+    dataset_source="lhs",
+    subset_cache_root=None,
+    all_sample_sizes=None,
+    append_completed=False,
+):
+    """Train one surrogate and run selected normal/DR/EBU-DR methods."""
+
+    method_opt_seeds = tuple(
+        (str(method), tuple(int(seed) for seed in seeds))
+        for method, seeds in method_opt_seeds
+    )
+    specs = tuple(METHOD_REGISTRY[method] for method, _ in method_opt_seeds)
+    if not specs:
+        raise ValueError("method_opt_seeds must contain at least one method.")
+    families = {spec.family for spec in specs}
+    if len(families) != 1:
+        raise ValueError("A shared-surrogate group must use one surrogate family.")
+    categories = {spec.category for spec in specs}
+    if not categories.issubset({"normal", "dr", "ebu_dr"}):
+        if not (len(specs) == 1 and categories == {"hidden"}):
+            raise ValueError(
+                "Only normal, DR, and EBU-DR can share a surrogate group."
+            )
+
+    prepared = _prepare_predictor_group(
+        output_dir,
+        problem_name,
+        training_size,
+        lhs_seed,
+        specs[0],
+        dataset_source=dataset_source,
+        subset_cache_root=subset_cache_root,
+        all_sample_sizes=all_sample_sizes,
+    )
+    rows = []
+    for (method, opt_seeds), spec in zip(method_opt_seeds, specs):
+        try:
+            method_rows, _ = _run_prepared_predictor_method(
+                prepared,
+                output_dir,
+                problem_name,
+                training_size,
+                lhs_seed,
+                spec,
+                opt_seeds,
+                n_gen,
+                pop_size,
+                dataset_source=dataset_source,
+            )
+        except Exception as error:
+            message = f"{type(error).__name__}: {error}\n{traceback.format_exc()}"
+            method_rows = [
+                dict(
+                    _base_row(
+                        problem_name,
+                        method,
+                        training_size,
+                        lhs_seed,
+                        prepared["model_seed"],
+                        seed,
+                        prepared["training_time"],
+                        data=prepared["data"],
+                        dataset_source=dataset_source,
+                        n_gen=n_gen,
+                        pop_size=pop_size,
+                    ),
+                    MSEpre=prepared["mse_pre"],
+                    error_message=message,
+                )
+                for seed in opt_seeds
+            ]
+        rows.extend(method_rows)
+        if append_completed:
+            append_rows(Path(output_dir), method_rows)
+    return rows, prepared["pair"]
+
+
+def _run_predictor_group(
+    output_dir,
+    problem_name,
+    training_size,
+    lhs_seed,
+    spec,
+    opt_seeds,
+    n_gen,
+    pop_size,
+    dataset_source="lhs",
+    subset_cache_root=None,
+    all_sample_sizes=None,
+):
+    """Compatibility wrapper for a single predictor method."""
+
+    return _run_predictor_family_group(
+        output_dir,
+        problem_name,
+        training_size,
+        lhs_seed,
+        ((spec.name, opt_seeds),),
+        n_gen,
+        pop_size,
+        dataset_source=dataset_source,
+        subset_cache_root=subset_cache_root,
+        all_sample_sizes=all_sample_sizes,
+    )
 
 
 def _run_baseline_group(
@@ -1132,6 +1290,64 @@ def run_group(
         return rows, ()
 
 
+def run_predictor_family_group(
+    output_dir: Path,
+    problem: str,
+    training_size: int,
+    lhs_seed: int,
+    method_opt_seeds,
+    n_gen=100,
+    pop_size=100,
+    dataset_source="lhs",
+    subset_cache_root=None,
+    all_sample_sizes=None,
+):
+    """Run normal/DR/EBU-DR for one family with one shared final surrogate."""
+
+    output_dir = Path(output_dir)
+    method_opt_seeds = tuple(
+        (str(method), tuple(int(seed) for seed in seeds))
+        for method, seeds in method_opt_seeds
+    )
+    try:
+        return _run_predictor_family_group(
+            output_dir,
+            problem,
+            training_size,
+            lhs_seed,
+            method_opt_seeds,
+            int(n_gen),
+            int(pop_size),
+            dataset_source=dataset_source,
+            subset_cache_root=subset_cache_root,
+            all_sample_sizes=all_sample_sizes,
+            append_completed=True,
+        )
+    except Exception as error:
+        message = f"{type(error).__name__}: {error}\n{traceback.format_exc()}"
+        rows = []
+        for method, opt_seeds in method_opt_seeds:
+            rows.extend(
+                dict(
+                    _base_row(
+                        problem,
+                        method,
+                        training_size,
+                        lhs_seed,
+                        lhs_seed,
+                        seed,
+                        0.0,
+                        dataset_source=dataset_source,
+                        n_gen=n_gen,
+                        pop_size=pop_size,
+                    ),
+                    error_message=message,
+                )
+                for seed in opt_seeds
+            )
+        return rows, ()
+
+
 def cleanup_model_storage(model_objects) -> None:
     """Delete temporary model directories after their result rows are durable."""
     for model in model_objects:
@@ -1155,6 +1371,9 @@ def read_result_rows(output_dir: Path) -> list[dict]:
     output_dir = Path(output_dir)
     paths = sorted(output_dir.glob("exp*_results.csv"))
     paths += sorted((output_dir / "csv").glob("exp*_results.csv"))
+    paths += sorted((output_dir / "csv").glob("surrogate_*_results.csv"))
+    paths += sorted((output_dir / "csv").glob("*_NSGA-II_results.csv"))
+    paths += sorted((output_dir / "csv").glob("results_*.csv"))
     for path in paths:
         with path.open(newline="", encoding="utf-8") as handle:
             rows.extend(csv.DictReader(handle))
@@ -1215,15 +1434,35 @@ def _drop_superseded_protocol_rows(rows: Iterable[dict]) -> list[dict]:
     ]
 
 
+def _result_csv_path(raw_dir: Path, row: dict) -> Path:
+    """Route each primary surrogate/category pair to one cross-problem CSV."""
+
+    problem_index = {name: i + 1 for i, name in enumerate(PROBLEMS)}
+    method = str(row.get("method") or "")
+    spec = METHOD_REGISTRY.get(method)
+    if spec is not None and spec.category in {"normal", "dr", "ebu_dr"}:
+        return Path(raw_dir) / f"results_{spec.family}_{spec.category}.csv"
+    return Path(raw_dir) / f"exp{problem_index[row['problem']]}_results.csv"
+
+
+def _raw_result_paths(raw_dir: Path) -> list[Path]:
+    raw_dir = Path(raw_dir)
+    return sorted(
+        set(raw_dir.glob("exp*_results.csv"))
+        | set(raw_dir.glob("surrogate_*_results.csv"))
+        | set(raw_dir.glob("*_NSGA-II_results.csv"))
+        | set(raw_dir.glob("results_*.csv"))
+    )
+
+
 def append_rows(output_dir: Path, rows: Iterable[dict]) -> int:
     """Append missing completed rows, safely and without duplicate successes."""
     output_dir = Path(output_dir)
     raw_dir = output_dir / "csv"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    problem_index = {name: i + 1 for i, name in enumerate(PROBLEMS)}
     rows_by_path = {}
     for row in rows:
-        path = raw_dir / f"exp{problem_index[row['problem']]}_results.csv"
+        path = _result_csv_path(raw_dir, row)
         rows_by_path.setdefault(path, []).append(row)
     written = 0
     for path, pending_rows in rows_by_path.items():
@@ -1314,14 +1553,52 @@ def append_rows(output_dir: Path, rows: Iterable[dict]) -> int:
 
 
 def reconcile_result_csvs(output_dir: Path) -> int:
-    """Import legacy rows and remove superseded protocols when replacements exist."""
+    """Import, split primary categories, and retire superseded protocols."""
     output_dir = Path(output_dir)
+    raw_dir = output_dir / "csv"
+    raw_dir.mkdir(parents=True, exist_ok=True)
     legacy_rows = []
     for path in sorted(output_dir.glob("exp*_results.csv")):
         with path.open(newline="", encoding="utf-8") as handle:
             legacy_rows.extend(csv.DictReader(handle))
     written = append_rows(output_dir, legacy_rows) if legacy_rows else 0
-    for path in sorted((output_dir / "csv").glob("exp*_results.csv")):
+
+    rows_to_move = []
+    for path in _raw_result_paths(raw_dir):
+        with path.open("a+", newline="", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                handle.seek(0)
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+                retained = []
+                for row in rows:
+                    if _result_csv_path(raw_dir, row) == path:
+                        retained.append(row)
+                    else:
+                        rows_to_move.append(row)
+                if len(retained) == len(rows):
+                    continue
+                handle.seek(0)
+                handle.truncate()
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=RESULT_FIELDS,
+                    extrasaction="ignore",
+                )
+                writer.writeheader()
+                for row in retained:
+                    writer.writerow(
+                        {name: row.get(name, "") for name in RESULT_FIELDS}
+                    )
+                handle.flush()
+                os.fsync(handle.fileno())
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    if rows_to_move:
+        written += append_rows(output_dir, rows_to_move)
+
+    for path in _raw_result_paths(raw_dir):
         with path.open("a+", newline="", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:

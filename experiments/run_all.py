@@ -39,6 +39,7 @@ from sample_size_common import (
     load_config_file, organize_cache_files,
     current_protocol_version, read_result_rows, reconcile_result_csvs,
     result_optimizer_settings, result_protocol_version, run_group,
+    run_predictor_family_group,
     valid_success, write_manifest,
 )
 from sample_size_summary import summarize
@@ -234,6 +235,80 @@ def build_plan(args):
     return groups, skipped
 
 
+def build_execution_stages(args, payloads):
+    """Bundle primary methods by surrogate family and offline-data cell."""
+
+    payloads = tuple(payloads)
+    payloads_by_method = {
+        method: tuple(payload for payload in payloads if payload[4] == method)
+        for method in args.methods
+    }
+    stages = []
+    seen = set()
+    category_order = {"normal": 0, "dr": 1, "ebu_dr": 2}
+    for method in args.methods:
+        spec = METHOD_REGISTRY[method]
+        is_primary = spec.category in category_order
+        stage_key = ("family", spec.family) if is_primary else ("method", method)
+        if stage_key in seen:
+            continue
+        seen.add(stage_key)
+        if not is_primary:
+            method_payloads = payloads_by_method[method]
+            if method_payloads:
+                stages.append({
+                    "kind": "method",
+                    "name": method,
+                    "payloads": method_payloads,
+                    "worker_limit": (
+                        args.tabpfn_max_workers
+                        if spec.family == "tabpfn"
+                        else args.max_workers
+                    ),
+                })
+            continue
+
+        family_methods = sorted(
+            (
+                selected
+                for selected in args.methods
+                if METHOD_REGISTRY[selected].family == spec.family
+                and METHOD_REGISTRY[selected].category in category_order
+            ),
+            key=lambda selected: category_order[METHOD_REGISTRY[selected].category],
+        )
+        cell_payloads = {}
+        for selected in family_methods:
+            for payload in payloads_by_method[selected]:
+                cell_payloads.setdefault(payload[1:4], {})[selected] = payload
+        bundled = []
+        for cell in sorted(cell_payloads):
+            methods_for_cell = cell_payloads[cell]
+            first = next(iter(methods_for_cell.values()))
+            method_opt_seeds = tuple(
+                (selected, methods_for_cell[selected][5])
+                for selected in family_methods
+                if selected in methods_for_cell
+            )
+            bundled.append((
+                first[0],
+                first[1],
+                first[2],
+                first[3],
+                spec.family,
+                method_opt_seeds,
+                *first[6:],
+            ))
+        if bundled:
+            stages.append({
+                "kind": "family",
+                "name": spec.family,
+                "payloads": tuple(bundled),
+                "worker_limit": args.max_workers,
+            })
+    return stages
+
+
 def _release_worker_memory():
     """Release cyclic garbage and any already-loaded PyTorch CUDA cache."""
     gc.collect()
@@ -303,10 +378,71 @@ def _execute(payload):
             raise
 
 
-def _execute_sequence(payloads):
+def _execute_primary_family(payload):
+    initialize_worker_threads(1)
+    (
+        output_dir,
+        problem,
+        size,
+        lhs_seed,
+        family,
+        method_opt_seeds,
+        n_gen,
+        pop_size,
+        dataset_source,
+        subset_cache_dir,
+        all_sample_sizes,
+        root_config,
+    ) = payload
+    configure_method_settings(root_config)
+    method_label = " -> ".join(method for method, _ in method_opt_seeds)
+    log_path = group_log_path(
+        output_dir,
+        problem,
+        size,
+        lhs_seed,
+        f"{family}_shared_normal_dr_ebu_dr",
+    )
+    with redirect_process_output(log_path) as log_handle:
+        print(
+            f"\n=== source={dataset_source} | problem={problem} | N={size} | "
+            f"offline_seed={lhs_seed} | surrogate={family} | "
+            f"methods={method_label} ===",
+            file=log_handle,
+            flush=True,
+        )
+        try:
+            result = run_predictor_family_group(
+                Path(output_dir),
+                problem,
+                size,
+                lhs_seed,
+                method_opt_seeds,
+                n_gen,
+                pop_size,
+                dataset_source=dataset_source,
+                subset_cache_root=Path(subset_cache_dir),
+                all_sample_sizes=all_sample_sizes,
+            )
+            rows = result[0]
+            success_count = sum(row.get("status") == "success" for row in rows)
+            print(
+                f"=== shared-surrogate worker completed | success={success_count} | "
+                f"failed={len(rows) - success_count} ===",
+                file=log_handle,
+                flush=True,
+            )
+            return result
+        except Exception:
+            _release_worker_memory()
+            raise
+
+
+def _execute_sequence(payloads, kind="method"):
     rows = []
+    execute = _execute_primary_family if kind == "family" else _execute
     for payload in payloads:
-        method_rows, model_objects = _execute(payload)
+        method_rows, model_objects = execute(payload)
         try:
             append_rows(Path(payload[0]), method_rows)
         finally:
@@ -329,6 +465,20 @@ def main(argv=None):
         reconcile_result_csvs(args.output_dir)
     groups, skipped = build_plan(args)
     pending = sum(len(group[-1]) for group in groups)
+    payloads = [
+        (
+            str(args.output_dir),
+            *group,
+            args.n_gen,
+            args.pop_size,
+            args.dataset_source,
+            str(args.subset_cache_dir),
+            tuple(args.train_sizes),
+            args.root_config,
+        )
+        for group in groups
+    ]
+    execution_stages = build_execution_stages(args, payloads)
     if args.dry_run:
         print(f"Problems: {len(args.problems)} | methods: {len(args.methods)}")
         print(f"Config: {args.config}")
@@ -339,7 +489,17 @@ def main(argv=None):
         print(f"Total optimization tasks: {total} = {len(args.problems)} problems × "
               f"{len(args.train_sizes)} sizes × {len(args.lhs_seeds)} offline seeds × "
               f"{len(args.opt_seeds)} optimizer seeds × {len(args.methods)} methods")
-        print(f"Pending: {pending} | skipped by resume: {skipped} | group executions: {len(groups)}")
+        worker_groups = sum(len(stage["payloads"]) for stage in execution_stages)
+        shared_groups = sum(
+            len(stage["payloads"])
+            for stage in execution_stages
+            if stage["kind"] == "family"
+        )
+        print(
+            f"Pending: {pending} | skipped by resume: {skipped} | "
+            f"worker groups: {worker_groups} | "
+            f"shared-surrogate fits: {shared_groups}"
+        )
         for problem, size, lhs_seed, method, seeds in groups:
             print(
                 f"  {problem} | N={size} | offline_seed={lhs_seed} | "
@@ -365,19 +525,6 @@ def main(argv=None):
         "max_workers": args.max_workers,
         "tabpfn_max_workers": args.tabpfn_max_workers,
     })
-    payloads = [
-        (
-            str(args.output_dir),
-            *group,
-            args.n_gen,
-            args.pop_size,
-            args.dataset_source,
-            str(args.subset_cache_dir),
-            tuple(args.train_sizes),
-            args.root_config,
-        )
-        for group in groups
-    ]
     progress = ProgressReporter(total, skipped)
 
     def record_progress(rows, label, write_results=True):
@@ -388,24 +535,26 @@ def main(argv=None):
         progress.record(success_count, failed_count, label)
 
     progress.start()
-    # Execute complete method stages in the configured/CLI order. Regular methods
-    # can use the full CPU allocation; only the TabPFN stage receives the smaller
-    # API-concurrency cap.
-    for method in args.methods:
-        method_payloads = [payload for payload in payloads if payload[4] == method]
-        if not method_payloads:
-            continue
-        family = METHOD_REGISTRY[method].family
-        worker_limit = args.tabpfn_max_workers if family == "tabpfn" else args.max_workers
-        method_workers = min(worker_limit, len(method_payloads))
+    # Primary stages are grouped by surrogate family. Each worker trains one
+    # final surrogate per offline-data cell, then runs normal -> DR -> EBU-DR.
+    # Non-primary methods retain their independent method stages.
+    for stage in execution_stages:
+        stage_payloads = stage["payloads"]
+        stage_workers = min(stage["worker_limit"], len(stage_payloads))
+        execute = _execute_primary_family if stage["kind"] == "family" else _execute
 
-        if method_workers == 1:
-            for payload in method_payloads:
-                rows, model_objects = _execute(payload)
+        if stage_workers == 1:
+            for payload in stage_payloads:
+                rows, model_objects = execute(payload)
                 try:
+                    method_label = (
+                        " -> ".join(method for method, _ in payload[5])
+                        if stage["kind"] == "family"
+                        else payload[4]
+                    )
                     label = (
                         f"{payload[1]} | N={payload[2]} | "
-                        f"offline_seed={payload[3]} | {method}"
+                        f"offline_seed={payload[3]} | {method_label}"
                     )
                     record_progress(rows, label)
                 finally:
@@ -418,17 +567,26 @@ def main(argv=None):
         active_label = "not-yet-reported task"
         try:
             with ProcessPoolExecutor(
-                max_workers=method_workers,
+                max_workers=stage_workers,
                 mp_context=context,
                 initializer=initialize_worker_threads,
                 initargs=(1,),
             ) as executor:
                 future_labels = {}
-                for payload in method_payloads:
-                    future = executor.submit(_execute_sequence, (payload,))
+                for payload in stage_payloads:
+                    future = executor.submit(
+                        _execute_sequence,
+                        (payload,),
+                        stage["kind"],
+                    )
+                    method_label = (
+                        " -> ".join(method for method, _ in payload[5])
+                        if stage["kind"] == "family"
+                        else payload[4]
+                    )
                     future_labels[future] = (
                         f"{payload[1]} | N={payload[2]} | "
-                        f"offline_seed={payload[3]} | {method}"
+                        f"offline_seed={payload[3]} | {method_label}"
                     )
                 for future in as_completed(future_labels):
                     active_label = future_labels[future]
@@ -440,7 +598,7 @@ def main(argv=None):
         except BrokenProcessPool:
             print(
                 "[worker-pool-failed] A worker exited without a Python "
-                f"exception while processing the {method} stage "
+                f"exception while processing the {stage['name']} stage "
                 f"(observed while waiting for: {active_label}).",
                 file=sys.stderr,
                 flush=True,

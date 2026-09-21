@@ -60,6 +60,11 @@ def _result_paths(input_dirs):
     paths = []
     for input_dir in (Path(value) for value in input_dirs):
         paths.extend(sorted((input_dir / "csv").glob("exp*_results.csv")))
+        paths.extend(
+            sorted((input_dir / "csv").glob("surrogate_*_results.csv"))
+        )
+        paths.extend(sorted((input_dir / "csv").glob("*_NSGA-II_results.csv")))
+        paths.extend(sorted((input_dir / "csv").glob("results_*.csv")))
         paths.extend(sorted(input_dir.glob("exp*_results.csv")))
         for filename in ("dl_baselines.csv", "generative_baselines.csv"):
             path = input_dir / filename

@@ -90,27 +90,57 @@ latest row is selected. `protocol_inventory.csv` lists every protocol/config
 identity found, and `stale_protocol_rows.csv` records excluded legacy rows; a
 mixed identity set also emits a runtime warning.
 
-Methods run as complete stages in the configured/CLI method order.
-With `--max-workers 72`, every method stage can use up to 72 workers only when
-72 CPU cores have been allocated. Each worker is explicitly capped at one
+Primary methods run as surrogate-family stages. For each
+`(problem, N, offline_seed, surrogate family)` cell, one worker trains the final
+surrogate once and then runs normal, DR, and EBU-DR in that order, each over
+the pending optimization seeds. EBU-DR additionally fits or loads its OOF
+parameters once. Resume may omit already-successful categories or seeds from
+the same shared group. Baselines retain independent method stages.
+
+With `--max-workers 72`, every family or baseline-method stage can use up to 72
+workers only when 72 CPU cores have been allocated. Each worker is explicitly capped at one
 OpenMP, MKL, OpenBLAS, NumExpr, BLIS, Accelerate, and Torch compute thread, so
 the recommended worker count is `allocated CPU cores / 1`, capped by pending
 groups. The same value is forwarded to the DL/MOBO and generative
 runners. Their independent `(method, problem, N, offline_seed)` groups use
-spawned worker processes, while the optimization seeds inside one fitted-model
-group remain sequential so they continue to reuse the same trained model.
+spawned worker processes, while the three primary categories and optimization
+seeds inside one fitted-model group remain sequential so they reuse the same
+trained final surrogate.
 The effective process count is capped by the number of pending groups.
 
-Raw and summary CSV files are written under `results/csv/`.
+Raw and summary CSV files are written under `results/csv/`. Primary rows are
+grouped by surrogate family and optimization category. Each file contains that
+combination's rows across every optimization problem:
+
+```text
+results_gpr_rbf_normal.csv
+results_gpr_rbf_dr.csv
+results_gpr_rbf_ebu_dr.csv
+results_gpr_matern_normal.csv
+results_gpr_matern_dr.csv
+results_gpr_matern_ebu_dr.csv
+results_qr_normal.csv
+results_qr_dr.csv
+results_qr_ebu_dr.csv
+results_bnn_normal.csv
+results_bnn_dr.csv
+results_bnn_ebu_dr.csv
+```
+
+Classical baseline rows keep the existing per-problem `exp1_results.csv` form.
+At startup, primary rows found in an old mixed, per-problem, or per-category
+CSV are migrated to the appropriate surrogate/category file.
 Paired dataset archives are stored under `results/npz/`. Surrogate models are
-not persisted as PKL files: each method trains one model per objective, uses them for all
-optimizer seeds in that method/LHS/training-size group, and releases it after
-the group results have been appended and flushed to CSV. AutoGluon uses
+not persisted as PKL files: each primary surrogate family trains one model per
+objective, uses it for normal/DR/EBU-DR and all requested optimizer seeds in
+that offline-data cell, and releases it after the shared group has been
+appended and flushed to CSV. AutoGluon uses
 temporary model directories that are explicitly removed immediately after the
 CSV write. At startup, obsolete
 `surrogate_*.pkl` files and the legacy `AutogluonModels/` directory are removed.
-After each method/LHS/training-size group, every worker runs Python garbage
-collection and clears the PyTorch CUDA cache when CUDA is already in use.
+After each shared primary group or baseline method group, every worker runs
+Python garbage collection and clears the PyTorch CUDA cache when CUDA is
+already in use.
 After every complete, error-free main run, the runner automatically regenerates
 all five summary CSV files from the accumulated raw result CSV files.
 At startup, legacy `results/exp*_results.csv` rows missing from the new CSV

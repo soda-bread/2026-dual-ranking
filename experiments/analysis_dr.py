@@ -79,11 +79,16 @@ def _load_results(results_dir):
             configure_method_settings(load_config_file(config_path))
     patterns = (
         str(results_dir / "csv" / "exp*_results.csv"),
+        str(results_dir / "csv" / "surrogate_*_results.csv"),
+        str(results_dir / "csv" / "*_NSGA-II_results.csv"),
+        str(results_dir / "csv" / "results_*.csv"),
         str(results_dir / "exp*_results.csv"),
     )
     files = sorted({path for pattern in patterns for path in glob.glob(pattern)})
     if not files:
-        raise FileNotFoundError(f"No exp*_results.csv files under {results_dir}")
+        raise FileNotFoundError(
+            f"No primary or baseline result CSV files under {results_dir}"
+        )
     frame = pd.concat((pd.read_csv(path) for path in files), ignore_index=True)
     frame = frame.loc[frame["status"].astype(str).str.lower() == "success"].copy()
     frame["family"] = frame["method"].map(
